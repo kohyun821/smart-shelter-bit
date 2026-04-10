@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { Sun } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
+import { LogPanel } from '@/components/log-panel'
 
 // ─── Color palette ────────────────────────────────────────────────────────────
 const MAIN  = '#1A237E' // deep navy
@@ -22,15 +23,7 @@ interface BusArrival {
   totalStops: number      // total stops on route
 }
 
-// ─── Mock data (replace with real API in production) ─────────────────────────
-const MOCK_ARRIVALS: BusArrival[] = [
-  { id: 'a1', routeNo: '33',    arrivalSec: 29,   restStopCount: 1,  isLowFloor: true,  isLastBus: false, currentStop: 13, totalStops: 14 },
-  { id: 'a2', routeNo: '60',    arrivalSec: 148,  restStopCount: 3,  isLowFloor: false, isLastBus: false, currentStop: 9,  totalStops: 12 },
-  { id: 'a3', routeNo: '700-1', arrivalSec: 480,  restStopCount: 5,  isLowFloor: false, isLastBus: true,  currentStop: 3,  totalStops: 8  },
-  { id: 'a4', routeNo: '700',   arrivalSec: 920,  restStopCount: 8,  isLowFloor: false, isLastBus: false, currentStop: 2,  totalStops: 10 },
-  { id: 'a5', routeNo: '33',    arrivalSec: 1080, restStopCount: 11, isLowFloor: true,  isLastBus: false, currentStop: 3,  totalStops: 14 },
-  { id: 'a6', routeNo: '3000',  arrivalSec: 1440, restStopCount: 6,  isLowFloor: false, isLastBus: false, currentStop: 1,  totalStops: 6  },
-]
+const BRIDGE_URL = 'http://localhost:4000'
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 function pad2(n: number) {
@@ -332,8 +325,8 @@ function FooterTicker() {
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 export default function Home() {
-  const [now, setNow] = useState(() => new Date())
-  const [arrivals, setArrivals] = useState(MOCK_ARRIVALS)
+  const [now, setNow]         = useState(() => new Date())
+  const [arrivals, setArrivals] = useState<BusArrival[]>([])
 
   // Real-time clock
   useEffect(() => {
@@ -341,21 +334,18 @@ export default function Home() {
     return () => clearInterval(t)
   }, [])
 
-  // Simulate 20-second polling cycle (replace with real API)
+  // SSE 구독 — 서버에서 20초마다 푸시
   useEffect(() => {
-    const t = setInterval(() => {
-      setArrivals(prev =>
-        prev.map(a => ({
-          ...a,
-          arrivalSec: Math.max(0, a.arrivalSec - 20),
-          currentStop:
-            a.arrivalSec <= 20
-              ? Math.min(a.totalStops, a.currentStop + 1)
-              : a.currentStop,
-        })),
-      )
-    }, 20_000)
-    return () => clearInterval(t)
+    const es = new EventSource(`${BRIDGE_URL}/api/bus/arrivals/stream`)
+
+    es.addEventListener('arrivals', (e) => {
+      try {
+        const data = JSON.parse(e.data)
+        if (Array.isArray(data)) setArrivals(data)
+      } catch { /* noop */ }
+    })
+
+    return () => es.close()
   }, [])
 
   return (
@@ -365,6 +355,7 @@ export default function Home() {
       <MainList arrivals={arrivals} />
       <PromoArea />
       <FooterTicker />
+      <LogPanel />
     </div>
   )
 }

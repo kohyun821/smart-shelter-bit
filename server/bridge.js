@@ -1,11 +1,15 @@
 'use strict'
 
+// logger를 가장 먼저 로드해야 이후 console 출력이 모두 캡처됩니다.
+const { registerSseClient, unregisterSseClient } = require('./logger')
+
 const express = require('express')
 const http = require('http')
 const WebSocket = require('ws')
 const cors = require('cors')
 const EventEmitter = require('events')
 const { loadSettings } = require('./loadSettings')
+const busApi = require('./busApi')
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -350,6 +354,153 @@ app.post('/Control', async (req, res) => {
 
 
 
+// ── 버스 기반 정보 ────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/bus/via-routes
+ * 현재 정류소의 경유 노선 목록(캐시)을 반환합니다.
+ */
+app.get('/api/bus/via-routes', (_req, res) => {
+  const cache = busApi.getViaRouteCache()
+  if (cache === null) {
+    return res.status(503).json({ resultCd: '503', resultMsg: '초기화 중', data: null })
+  }
+  res.json({ resultCd: '200', resultMsg: 'Success', data: cache })
+})
+
+// ── 버스 실시간 도착 정보 ─────────────────────────────────────────────────────
+
+// ── 공통 데이터 빌더 ──────────────────────────────────────────────────────────
+
+/**
+ * getAllRouteBusArrivalList 결과를 viaRouteCache와 JOIN해 프론트엔드용 배열로 변환합니다.
+ * REST 엔드포인트와 SSE 폴러가 함께 사용합니다.
+ * @returns {Promise<Array>}
+ */
+async function buildArrivalData() {
+  const bstopId  = busApi.loadBusStopId()
+  const items    = await busApi.fetchAllRouteBusArrivalList(bstopId)
+  const cache    = busApi.getViaRouteCache() || []
+  const routeMap = new Map(cache.map(r => [r.ROUTEID, r]))
+
+  return items
+    .map(a => {
+      const route       = routeMap.get(a.ROUTEID)
+      const totalStops  = route?.stops?.length ?? 0
+      const restStops   = parseInt(a.REST_STOP_COUNT) || 0
+      const currentStop = totalStops > 0 ? Math.max(1, totalStops - restStops) : 0
+
+      return {
+        id:            `${a.ROUTEID}_${a.BUSID}`,
+        routeNo:       route?.ROUTENO ?? a.ROUTEID,
+        arrivalSec:    parseInt(a.ARRIVALESTIMATETIME) || 0,
+        restStopCount: restStops,
+        isLowFloor:    a.LOW_TP_CD === '1',
+        isLastBus:     a.LASTBUSYN === '1',
+        currentStop,
+        totalStops,
+      }
+    })
+    .filter(a => a.arrivalSec < 3600)   // 60분 이상 제외
+    .sort((a, b) => a.arrivalSec - b.arrivalSec)
+}
+
+// ── SSE 폴러 ─────────────────────────────────────────────────────────────────
+
+const arrivalSseClients = new Set()
+let   lastArrivalData   = null
+let   arrivalPollTimer  = null
+
+async function pollAndBroadcast() {
+  try {
+    const data = await buildArrivalData()
+    lastArrivalData = data
+
+    const chunk = `event: arrivals\ndata: ${JSON.stringify(data)}\n\n`
+    for (const res of arrivalSseClients) {
+      try { res.write(chunk) } catch { arrivalSseClients.delete(res) }
+    }
+  } catch (err) {
+    console.warn('[Bridge][Arrivals] 폴링 실패:', err.message)
+  }
+}
+
+function startArrivalPoller() {
+  pollAndBroadcast()  // 즉시 1회 실행
+  arrivalPollTimer = setInterval(pollAndBroadcast, 20_000)
+  console.log('[Bridge][Arrivals] 실시간 폴링 시작 (20초 주기)')
+}
+
+function stopArrivalPoller() {
+  if (arrivalPollTimer) {
+    clearInterval(arrivalPollTimer)
+    arrivalPollTimer = null
+  }
+}
+
+// ── REST 엔드포인트 (단건 조회용) ────────────────────────────────────────────
+
+/**
+ * GET /api/bus/arrivals
+ */
+app.get('/api/bus/arrivals', async (_req, res) => {
+  try {
+    const data = await buildArrivalData()
+    res.json({ resultCd: '200', resultMsg: 'Success', data })
+  } catch (e) {
+    res.status(500).json({ resultCd: '500', resultMsg: 'Error', resultDesc: e.message, data: null })
+  }
+})
+
+// ── SSE 스트림 ────────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/bus/arrivals/stream
+ * 연결 즉시 마지막 데이터를 전송하고, 이후 20초마다 갱신 데이터를 푸시합니다.
+ */
+app.get('/api/bus/arrivals/stream', (req, res) => {
+  res.set({
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection:      'keep-alive',
+  })
+  res.flushHeaders()
+
+  // 연결 즉시 마지막 데이터 전송 (빈 화면 방지)
+  if (lastArrivalData) {
+    res.write(`event: arrivals\ndata: ${JSON.stringify(lastArrivalData)}\n\n`)
+  }
+
+  arrivalSseClients.add(res)
+  console.log(`[Bridge][Arrivals] SSE 클라이언트 연결 (총 ${arrivalSseClients.size}개)`)
+
+  req.on('close', () => {
+    arrivalSseClients.delete(res)
+    console.log(`[Bridge][Arrivals] SSE 클라이언트 해제 (총 ${arrivalSseClients.size}개)`)
+  })
+})
+
+// ── 로그 스트림 (SSE) ─────────────────────────────────────────────────────────
+
+/**
+ * GET /api/logs/stream
+ * 실시간 로그를 SSE로 스트리밍합니다.
+ * 연결 즉시 기존 로그 히스토리(event: history)를 전송하고,
+ * 이후 새 로그(event: log)를 실시간으로 전송합니다.
+ */
+app.get('/api/logs/stream', (req, res) => {
+  res.set({
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  })
+  res.flushHeaders()
+
+  registerSseClient(res)
+
+  req.on('close', () => unregisterSseClient(res))
+})
+
 // ── Health ────────────────────────────────────────────────────────────────────
 
 app.get('/api/health', (_req, res) => {
@@ -400,30 +551,35 @@ const server = http.createServer(app)
 async function start({ connectWebSocket = true } = {}) {
   server.listen(HTTP_PORT, '127.0.0.1', () => {
     console.log(`[Bridge] Listening on http://localhost:${HTTP_PORT}`)
-    console.log(`[Bridge]   GET /List    → data/stations.json`)
-    console.log(`[Bridge]   GET /Status  → data/facilities.json`)
   })
 
-
+  // 버스 기반 정보(경유 노선 목록) 초기화 후 실시간 폴링 시작
+  await busApi.initBusBaseInfo()
+  startArrivalPoller()
 
   if (connectWebSocket) {
     // stationId를 읽어 WS URL 구성 후 연결
-    const stationId = await getStationId()
-    wsUrl = process.env.BRIDGE_WS_URL || `${settings.wsBaseUrl}/ws/shelter/${stationId}`
-    console.log(`[Bridge][WS] 대상 URL: ${wsUrl} (stationId: ${stationId})`)
-    connectWS()
+    // const stationId = await getStationId()
+    // wsUrl = process.env.BRIDGE_WS_URL || `${settings.wsBaseUrl}/ws/shelter/${stationId}`
+    // console.log(`[Bridge][WS] 대상 URL: ${wsUrl} (stationId: ${stationId})`)
+    // connectWS()
   }
 }
 
 function stop() {
   clearTimeout(reconnectTimer)
   stopStatusUpdateTimer()
+  stopArrivalPoller()
+
   if (wsClient) {
     wsClient.removeAllListeners()
     wsClient.terminate()
   }
+
   for (const res of sseClients) res.end()
   sseClients.clear()
+  for (const res of arrivalSseClients) res.end()
+  arrivalSseClients.clear()
 
   server.close()
   console.log('[Bridge] Stopped')
