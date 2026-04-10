@@ -1,0 +1,31 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Bridge 서버 실행 (WS 연결 포함)",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/server/bridge.js",
+      "args": ["--ws"],
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**"]
+    },
+    {
+      "name": "Bridge 서버 실행 (WS 없이)",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/server/bridge.js",
+      "args": [],
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**"]
+    },
+    {
+      "name": "실행 중인 Node 프로세스에 연결",
+      "type": "node",
+      "request": "attach",
+      "port": 9229,
+      "restart": true,
+      "skipFiles": ["<node_internals>/**"]
+    }
+  ]
+}
