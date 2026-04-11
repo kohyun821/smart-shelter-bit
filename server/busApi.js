@@ -16,6 +16,12 @@ const BASE_ARRIVAL_URL = 'http://apis.data.go.kr/6280000/busArrivalService'
 /** @type {Array|null} 경유 노선 목록 캐시 */
 let viaRouteCache = null
 
+/** @type {string|null} 정류소 명칭 (BSTOPNM) */
+let bstopNmCache = null
+
+/** @type {string|null} 단축 정류소 ID (SHORT_BSTOPID) */
+let shortBstopIdCache = null
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function getServiceKey() {
@@ -75,6 +81,8 @@ const ROUTE_FIELDS = [
 ]
 
 const SECTION_FIELDS = ['BSTOPID', 'BSTOPNM', 'PATHSEQ', 'BSTOPSEQ', 'DIRCD']
+
+const ROUTE_ID_FIELDS = ['ROUTEID', 'ROUTENO', 'FBUS_DEPHMS', 'LBUS_DEPHMS']
 
 function parseXml(xml, fields) {
   const resultCode = extractTag(xml, 'resultCode')
@@ -156,6 +164,84 @@ async function getBusRouteSectionList(routeId, myBstopSeq, numOfRows = 500) {
   console.log(`[BusApi]   ✔ 전체 ${allStops.length}개 정류소 → 내 정류소까지 ${stops.length}개 저장`)
 
   return stops
+}
+
+// ─── getBusRouteId ────────────────────────────────────────────────────────────
+
+/**
+ * 노선 첫차/막차 시각 조회 — FBUS_DEPHMS, LBUS_DEPHMS (hhmm 4자리)
+ * @param {string} routeId
+ * @returns {Promise<{ROUTEID:string, ROUTENO:string, FBUS_DEPHMS:string, LBUS_DEPHMS:string}|null>}
+ */
+async function getBusRouteId(routeId) {
+  const serviceKey = getServiceKey()
+  const url = `${BASE_ROUTE_URL}/getBusRouteId?serviceKey=${serviceKey}&routeId=${routeId}&pageNo=1&numOfRows=1`
+
+  console.log(`[BusApi]   ▶ GET getBusRouteId  routeId=${routeId}`)
+
+  const t0 = Date.now()
+  const response = await fetch(url)
+  const elapsed = Date.now() - t0
+
+  console.log(`[BusApi]   ◀ HTTP ${response.status} (${elapsed}ms)`)
+  if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+
+  const xml = await response.text()
+  const items = parseXml(xml, ROUTE_ID_FIELDS)
+  return items[0] ?? null
+}
+
+// ─── getBusStationIdList ──────────────────────────────────────────────────────
+
+/**
+ * 정류소 ID로 정류소 상세 정보를 직접 조회합니다 — interface.md 1-3.
+ * getBusStationNmList와 응답 필드 동일 (BSTOPID, BSTOPNM, SHORT_BSTOPID 등)
+ * @param {string} bstopId
+ * @returns {Promise<{BSTOPID:string, BSTOPNM:string, SHORT_BSTOPID:string}|null>}
+ */
+async function getBusStationIdList(bstopId) {
+  const serviceKey = getServiceKey()
+  const url = `${BASE_STATION_URL}/getBusStationIdList?serviceKey=${serviceKey}&bstopId=${bstopId}&pageNo=1&numOfRows=1`
+
+  console.log(`[BusApi] ▶ GET getBusStationIdList  bstopId=${bstopId}`)
+
+  const t0 = Date.now()
+  const response = await fetch(url)
+  const elapsed = Date.now() - t0
+
+  console.log(`[BusApi] ◀ HTTP ${response.status} (${elapsed}ms)`)
+  if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+
+  const xml = await response.text()
+  const items = parseXml(xml, NM_LIST_FIELDS)
+  return items[0] ?? null
+}
+
+// ─── getBusStationNmList ──────────────────────────────────────────────────────
+
+const NM_LIST_FIELDS = ['BSTOPID', 'BSTOPNM', 'SHORT_BSTOPID']
+
+/**
+ * 정류소명으로 정류소 목록 조회 — lib/api/bus.ts의 getBusStationNmList에 대응.
+ * @param {string} bstopNm 정류소 명칭 (부분 일치)
+ * @param {number} numOfRows
+ * @returns {Promise<Array>}
+ */
+async function getBusStationNmList(bstopNm, numOfRows = 255) {
+  const serviceKey = getServiceKey()
+  const url = `${BASE_STATION_URL}/getBusStationNmList?serviceKey=${serviceKey}&bstopNm=${encodeURIComponent(bstopNm)}&pageNo=1&numOfRows=${numOfRows}`
+
+  console.log(`[BusApi] ▶ GET getBusStationNmList  bstopNm=${bstopNm}`)
+
+  const t0 = Date.now()
+  const response = await fetch(url)
+  const elapsed = Date.now() - t0
+
+  console.log(`[BusApi] ◀ HTTP ${response.status} (${elapsed}ms)`)
+  if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+
+  const xml = await response.text()
+  return parseXml(xml, NM_LIST_FIELDS)
 }
 
 // ─── getAllRouteBusArrivalList ────────────────────────────────────────────────
@@ -264,18 +350,36 @@ function scheduleRetry(pending, attempt = 0) {
 // ─── 초기화 ───────────────────────────────────────────────────────────────────
 
 /**
- * 프로그램 시작 시 경유 노선 목록 + 각 노선의 내 정류소까지 정류소 목록을 초기화합니다.
- * 실패한 노선은 백그라운드에서 자동 재시도됩니다.
+ * Step 0만 수행: BSTOPNM / SHORT_BSTOPID 캐시.
+ * HTTP 서버를 열기 전에 await 하면 /api/bus/stop-name 경쟁(null 응답)을 막을 수 있습니다.
  */
-async function initBusBaseInfo() {
+async function initStopMetaOnly() {
+  const bstopId = loadBusStopId()
+  console.log(`[BusApi] Step 0: 정류소 메타 조회 (bus_stop_id=${bstopId})`)
   try {
-    const bstopId = loadBusStopId()
-    console.log(`[BusApi] 기반 정보 초기화 시작 (bus_stop_id=${bstopId})`)
+    const stopInfo = await getBusStationIdList(bstopId)
+    if (stopInfo) {
+      bstopNmCache      = stopInfo.BSTOPNM       || null
+      shortBstopIdCache = stopInfo.SHORT_BSTOPID || null
+      console.log(`[BusApi] ✔ Step 0: BSTOPNM=${bstopNmCache}  SHORT_BSTOPID=${shortBstopIdCache}`)
+    } else {
+      console.warn(`[BusApi]   Step 0: 정류소 정보 없음 (bstopId=${bstopId})`)
+    }
+  } catch (err) {
+    console.warn(`[BusApi]   Step 0 실패: ${err.message}`)
+  }
+}
 
-    // Step 1: 경유 노선 목록
+/**
+ * Step 1–3: 경유 노선·구간 캐시 + 막차 시각(백그라운드). 실패한 노선은 재시도 예약.
+ */
+async function initBusRoutesAndStops() {
+  const bstopId = loadBusStopId()
+  try {
+    console.log(`[BusApi] Step 1–2: 경유 노선·정류소 캐시 초기화 (bus_stop_id=${bstopId})`)
+
     const routes = await getBusStationViaRouteList(bstopId)
 
-    // Step 2: 각 노선의 내 정류소까지 정류소 목록 (순차 호출 — 429 방지)
     console.log(`[BusApi] Step 2: ${routes.length}개 노선 정류소 목록 조회 (순차)`)
     const routesWithStops = []
     const failed = []
@@ -298,10 +402,41 @@ async function initBusBaseInfo() {
     if (failed.length > 0) {
       scheduleRetry(failed)
     }
+
+    ;(async () => {
+      console.log(`[BusApi] Step 3: ${routesWithStops.length}개 노선 막차 시각 조회 시작`)
+      for (const route of routesWithStops) {
+        try {
+          const info = await getBusRouteId(route.ROUTEID)
+          if (info) {
+            route.fbusDephms = info.FBUS_DEPHMS || ''
+            route.lbusDephms = info.LBUS_DEPHMS || ''
+            console.log(`[BusApi]   ✔ ${route.ROUTENO}: 첫차=${route.fbusDephms} 막차=${route.lbusDephms}`)
+          } else {
+            route.fbusDephms = ''
+            route.lbusDephms = ''
+          }
+        } catch (err) {
+          console.warn(`[BusApi]   ${route.ROUTENO}(${route.ROUTEID}) 막차 시각 조회 실패: ${err.message}`)
+          route.fbusDephms = ''
+          route.lbusDephms = ''
+        }
+      }
+      console.log(`[BusApi] ✔ Step 3 완료`)
+    })()
   } catch (err) {
-    console.error('[BusApi] 기반 정보 초기화 실패:', err.message)
+    console.error('[BusApi] 경유 노선 초기화 실패:', err.message)
     viaRouteCache = []
   }
+}
+
+/**
+ * 프로그램 시작 시 경유 노선 목록 + 각 노선의 내 정류소까지 정류소 목록을 초기화합니다.
+ * 실패한 노선은 백그라운드에서 자동 재시도됩니다.
+ */
+async function initBusBaseInfo() {
+  await initStopMetaOnly()
+  await initBusRoutesAndStops()
 }
 
 /**
@@ -312,11 +447,25 @@ function getViaRouteCache() {
   return viaRouteCache
 }
 
+function getBstopNm() {
+  return bstopNmCache
+}
+
+function getStopShortId() {
+  return shortBstopIdCache
+}
+
 module.exports = {
   initBusBaseInfo,
+  initStopMetaOnly,
+  initBusRoutesAndStops,
+  getBusStationIdList,
   getBusStationViaRouteList,
+  getBusStationNmList,
   getBusRouteSectionList,
   fetchAllRouteBusArrivalList,
   getViaRouteCache,
+  getBstopNm,
+  getStopShortId,
   loadBusStopId,
 }

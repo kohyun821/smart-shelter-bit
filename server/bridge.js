@@ -357,6 +357,16 @@ app.post('/Control', async (req, res) => {
 // ── 버스 기반 정보 ────────────────────────────────────────────────────────────
 
 /**
+ * GET /api/bus/stop-name
+ * viaRouteCache의 BSTOPNM(정류소 이름)을 반환합니다.
+ */
+app.get('/api/bus/stop-name', (_req, res) => {
+  const bstopNm      = busApi.getBstopNm()      ?? null
+  const shortBstopId = busApi.getStopShortId()  ?? null
+  res.json({ resultCd: '200', data: { bstopNm, shortBstopId } })
+})
+
+/**
  * GET /api/bus/via-routes
  * 현재 정류소의 경유 노선 목록(캐시)을 반환합니다.
  */
@@ -373,9 +383,36 @@ app.get('/api/bus/via-routes', (_req, res) => {
 // ── 공통 데이터 빌더 ──────────────────────────────────────────────────────────
 
 /**
- * getAllRouteBusArrivalList 결과를 viaRouteCache와 JOIN해 프론트엔드용 배열로 변환합니다.
+ * hhmm 4자리 문자열을 분 단위 숫자로 변환합니다.
+ * @param {string} hhmm
+ * @returns {number|null}
+ */
+function hhmmToMinutes(hhmm) {
+  if (!hhmm || hhmm.length !== 4) return null
+  return parseInt(hhmm.slice(0, 2)) * 60 + parseInt(hhmm.slice(2, 4))
+}
+
+/**
+ * 현재 시각이 해당 노선의 막차 시각을 지났는지 확인합니다.
+ * @param {string} lbusDephms — hhmm 4자리 (예: '2230', '0015')
+ * @returns {boolean}
+ */
+function isRouteServiceEnded(lbusDephms) {
+  const lastMin = hhmmToMinutes(lbusDephms)
+  if (lastMin === null) return false
+  const now = new Date()
+  const nowMin = now.getHours() * 60 + now.getMinutes()
+  // 자정 이후 막차(예: 0015=15분)는 당일 심야 운행으로 처리
+  if (lastMin < 240) {
+    return nowMin < 240 && nowMin > lastMin
+  }
+  return nowMin > lastMin
+}
+
+/**
+ * getAllRouteBusArrivalList 결과를 viaRouteCache와 JOIN해 프론트엔드용 객체로 변환합니다.
  * REST 엔드포인트와 SSE 폴러가 함께 사용합니다.
- * @returns {Promise<Array>}
+ * @returns {Promise<{arrivals: Array, serviceEnded: boolean}>}
  */
 async function buildArrivalData() {
   const bstopId  = busApi.loadBusStopId()
@@ -383,7 +420,7 @@ async function buildArrivalData() {
   const cache    = busApi.getViaRouteCache() || []
   const routeMap = new Map(cache.map(r => [r.ROUTEID, r]))
 
-  return items
+  const arrivals = items
     .map(a => {
       const route       = routeMap.get(a.ROUTEID)
       const totalStops  = route?.stops?.length ?? 0
@@ -393,6 +430,7 @@ async function buildArrivalData() {
       return {
         id:            `${a.ROUTEID}_${a.BUSID}`,
         routeNo:       route?.ROUTENO ?? a.ROUTEID,
+        routeType:     route?.ROUTETPCD ?? '',
         arrivalSec:    parseInt(a.ARRIVALESTIMATETIME) || 0,
         restStopCount: restStops,
         isLowFloor:    a.LOW_TP_CD === '1',
@@ -403,6 +441,14 @@ async function buildArrivalData() {
     })
     .filter(a => a.arrivalSec < 3600)   // 60분 이상 제외
     .sort((a, b) => a.arrivalSec - b.arrivalSec)
+
+  // 운행 종료 판단: 모든 노선의 막차 시각 데이터가 있고, 전부 지났으며, 운행 중 버스 없음
+  const allHaveSchedule = cache.length > 0 && cache.every(r => r.lbusDephms)
+  const serviceEnded = allHaveSchedule
+    && cache.every(r => isRouteServiceEnded(r.lbusDephms))
+    && arrivals.length === 0
+
+  return { arrivals, serviceEnded }
 }
 
 // ── SSE 폴러 ─────────────────────────────────────────────────────────────────
@@ -413,10 +459,10 @@ let   arrivalPollTimer  = null
 
 async function pollAndBroadcast() {
   try {
-    const data = await buildArrivalData()
-    lastArrivalData = data
+    const { arrivals, serviceEnded } = await buildArrivalData()
+    lastArrivalData = { arrivals, serviceEnded }
 
-    const chunk = `event: arrivals\ndata: ${JSON.stringify(data)}\n\n`
+    const chunk = `event: arrivals\ndata: ${JSON.stringify({ arrivals, serviceEnded })}\n\n`
     for (const res of arrivalSseClients) {
       try { res.write(chunk) } catch { arrivalSseClients.delete(res) }
     }
@@ -438,6 +484,55 @@ function stopArrivalPoller() {
   }
 }
 
+// ── 스냅샷 (테스트용 데이터 저장/불러오기) ───────────────────────────────────
+
+const SNAPSHOT_PATH = require('path').join(__dirname, '..', 'data', 'snapshot.json')
+
+/**
+ * GET /api/bus/snapshot/save
+ * 현재 화면에 표출 중인 도착 데이터를 data/snapshot.json에 저장합니다.
+ */
+app.get('/api/bus/snapshot/save', async (_req, res) => {
+  try {
+    const { arrivals, serviceEnded } = await buildArrivalData()
+    const snapshot = {
+      savedAt: new Date().toISOString(),
+      arrivals,
+      serviceEnded,
+      viaRoutes: (busApi.getViaRouteCache() || []).map(r => ({
+        ROUTEID: r.ROUTEID,
+        ROUTENO: r.ROUTENO,
+        PATHSEQ: r.PATHSEQ,
+        BSTOPSEQ: r.BSTOPSEQ,
+        DIRCD: r.DIRCD,
+        DESTINATION: r.DESTINATION,
+        fbusDephms: r.fbusDephms,
+        lbusDephms: r.lbusDephms,
+        stopsCount: r.stops?.length ?? 0,
+      })),
+    }
+    require('fs').writeFileSync(SNAPSHOT_PATH, JSON.stringify(snapshot, null, 2), 'utf-8')
+    console.log(`[Bridge][Snapshot] 저장 완료: ${SNAPSHOT_PATH}`)
+    res.json({ resultCd: '200', resultMsg: '스냅샷 저장 완료', savedAt: snapshot.savedAt, data: snapshot })
+  } catch (e) {
+    res.status(500).json({ resultCd: '500', resultMsg: 'Error', resultDesc: e.message })
+  }
+})
+
+/**
+ * GET /api/bus/snapshot
+ * data/snapshot.json에 저장된 테스트용 데이터를 반환합니다.
+ */
+app.get('/api/bus/snapshot', (_req, res) => {
+  try {
+    const raw = require('fs').readFileSync(SNAPSHOT_PATH, 'utf-8')
+    const snapshot = JSON.parse(raw)
+    res.json({ resultCd: '200', resultMsg: 'Success', data: snapshot })
+  } catch (e) {
+    res.status(404).json({ resultCd: '404', resultMsg: '스냅샷 없음 — /api/bus/snapshot/save 먼저 호출하세요', resultDesc: e.message })
+  }
+})
+
 // ── REST 엔드포인트 (단건 조회용) ────────────────────────────────────────────
 
 /**
@@ -445,8 +540,8 @@ function stopArrivalPoller() {
  */
 app.get('/api/bus/arrivals', async (_req, res) => {
   try {
-    const data = await buildArrivalData()
-    res.json({ resultCd: '200', resultMsg: 'Success', data })
+    const { arrivals, serviceEnded } = await buildArrivalData()
+    res.json({ resultCd: '200', resultMsg: 'Success', data: arrivals, serviceEnded })
   } catch (e) {
     res.status(500).json({ resultCd: '500', resultMsg: 'Error', resultDesc: e.message, data: null })
   }
@@ -549,12 +644,14 @@ app.get('/api/events', (req, res) => {
 const server = http.createServer(app)
 
 async function start({ connectWebSocket = true } = {}) {
+  // Step 0 완료 후 listen — 그 전에 요청이 들어오면 bstopNm 캐시가 비어 null이 반환됨
+  await busApi.initStopMetaOnly()
+
   server.listen(HTTP_PORT, '127.0.0.1', () => {
     console.log(`[Bridge] Listening on http://localhost:${HTTP_PORT}`)
   })
 
-  // 버스 기반 정보(경유 노선 목록) 초기화 후 실시간 폴링 시작
-  await busApi.initBusBaseInfo()
+  await busApi.initBusRoutesAndStops()
   startArrivalPoller()
 
   if (connectWebSocket) {
