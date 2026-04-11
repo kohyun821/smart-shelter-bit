@@ -27,6 +27,7 @@ interface BusArrival {
   isLastBus: boolean      // LASTBUSYN === 'Y'
   currentStop: number     // LATEST_STOPSEQ (1-based)
   totalStops: number      // total stops on route
+  latestStopName?: string
 }
 
 const BRIDGE_URL = 'http://localhost:4000'
@@ -208,7 +209,7 @@ function LocationBar({ currentStop, totalStops, restStopCount }: { currentStop: 
   const safeRestStopCount = Math.max(0, restStopCount)
   const isCompressed = safeRestStopCount > 6
   const nodeCount = 6
-  
+
   // Right-to-Left progression. Leftmost node (0) is "1정거장 전"
   const busPos = isCompressed ? 5 : Math.max(0, safeRestStopCount - 1)
 
@@ -235,14 +236,14 @@ function LocationBar({ currentStop, totalStops, restStopCount }: { currentStop: 
             {/* Connector line before each node (except first) */}
             {i > 0 && (
               isLongSeg ? (
-                <div 
-                  className="flex-1 h-2" 
+                <div
+                  className="flex-1 h-2"
                   style={{
                     backgroundImage: 'radial-gradient(circle, #D1D5DB 3px, transparent 3px)',
                     backgroundSize: '12px 8px',
                     backgroundPosition: 'center',
                     backgroundRepeat: 'repeat-x'
-                  }} 
+                  }}
                 />
               ) : (
                 <div className="flex-1 h-2" style={{ background: '#D1D5DB' }} />
@@ -286,48 +287,48 @@ function RouteRow({ arrival, zebra }: { arrival: BusArrival; zebra: boolean }) {
   return (
     <div
       className={cn(
-        'flex items-center gap-8 px-10 py-6 rounded-[2.5rem] border transition-colors shadow-sm',
+        'flex items-center gap-4 px-6 py-3 rounded-[1.5rem] border transition-colors shadow-sm',
         zebra ? 'bg-white border-white' : 'border-[#E8EAF6]',
       )}
       style={{ background: zebra ? '#ffffff' : SUB }}
     >
       {/* Route number chip */}
       <div
-        className="shrink-0 rounded-[1.5rem] flex items-center justify-center shadow-md pb-1"
-        style={{ background: routeColor, width: '10.5rem', height: '10.5rem' }}
+        className="shrink-0 rounded-[1rem] flex items-center justify-center shadow-md pb-0.5"
+        style={{ background: routeColor, width: '7rem', height: '7rem' }}
       >
-        <span className="text-white font-black text-center leading-tight drop-shadow-sm" style={{ fontSize: 'clamp(2.5rem, 5vw, 3.5rem)' }}>
+        <span className="text-white font-black text-center leading-tight drop-shadow-sm" style={{ fontSize: 'clamp(1.5rem, 3.5vw, 2.5rem)' }}>
           {displayRouteNo}
         </span>
       </div>
 
       {/* Middle — arrival time + badges + location bar */}
-      <div className="flex-1 flex items-center gap-12 min-w-0 pl-6">
+      <div className="flex-1 flex items-center gap-6 min-w-0 pl-2">
         {/* Left: time + badges */}
-        <div className="flex items-center gap-8 shrink-0 min-w-[340px]">
-          <div className="w-[17rem] shrink-0 flex items-center justify-start">
+        <div className="flex items-center gap-4 shrink-0 min-w-[240px]">
+          <div className="w-[12rem] shrink-0 flex items-center justify-start">
             {isImmediate ? (
-              <span className="font-black animate-pulse tracking-tighter whitespace-nowrap" style={{ color: POINT, fontSize: '6rem' }}>
+              <span className="font-black animate-pulse tracking-tighter whitespace-nowrap" style={{ color: POINT, fontSize: '3.8rem' }}>
                 곧 도착
               </span>
             ) : (
-              <div className="flex items-baseline gap-2">
+              <div className="flex items-baseline gap-1">
                 <span
                   className="font-black tabular-nums tracking-tighter"
-                  style={{ color: isUrgent ? POINT : MAIN, fontSize: '7.5rem', lineHeight: '1' }}
+                  style={{ color: isUrgent ? POINT : MAIN, fontSize: '5rem', lineHeight: '1' }}
                 >
                   {min}
                 </span>
-                <span className="text-5xl font-black tracking-tight whitespace-nowrap" style={{ color: isUrgent ? POINT : MAIN }}>분</span>
+                <span className="text-3xl font-black tracking-tight whitespace-nowrap" style={{ color: isUrgent ? POINT : MAIN }}>분</span>
               </div>
             )}
           </div>
 
-          <div className="flex flex-col gap-4 justify-center">
-            <div className="flex items-center gap-3">
+          <div className="flex flex-col gap-2 justify-center">
+            <div className="flex items-center gap-2">
               {isLowFloor && (
                 <Badge
-                  className="rounded-full text-white text-2xl font-bold px-5 py-2 border-0 leading-none shadow-sm"
+                  className="rounded-full text-white text-base font-bold px-3 py-1 border-0 leading-none shadow-sm"
                   style={{ background: POINT }}
                 >
                   ♿ 저상
@@ -335,20 +336,20 @@ function RouteRow({ arrival, zebra }: { arrival: BusArrival; zebra: boolean }) {
               )}
               {isLastBus && (
                 <Badge
-                  className="rounded-full text-white text-2xl font-bold px-5 py-2 border-0 leading-none shadow-sm"
+                  className="rounded-full text-white text-base font-bold px-3 py-1 border-0 leading-none shadow-sm"
                   style={{ background: POINT }}
                 >
                   막차
                 </Badge>
               )}
             </div>
-            <div className="flex flex-col gap-1.5 mt-1">
+            <div className="flex flex-col gap-0.5 mt-0.5">
               {!isImmediate && restStopCount > 0 && (
-                <span className="text-3xl text-slate-800 font-black tracking-tight whitespace-nowrap">
+                <span className="text-xl text-slate-800 font-black tracking-tight whitespace-nowrap">
                   {restStopCount}정거장 전
                 </span>
               )}
-              <span className="text-2xl font-bold tracking-tight whitespace-nowrap" style={{ color: routeColor }}>
+              <span className="text-base font-bold tracking-tight whitespace-nowrap" style={{ color: routeColor }}>
                 {getRouteTypeName(routeType)}
               </span>
             </div>
@@ -356,10 +357,10 @@ function RouteRow({ arrival, zebra }: { arrival: BusArrival; zebra: boolean }) {
         </div>
 
         {/* Location bar stretches here */}
-        <div className="flex-1 flex items-center pl-12 pr-6 relative mt-16">
+        <div className="flex-1 flex items-center pl-6 pr-4 relative mt-10">
           {latestStopName && (
-            <div className="absolute bottom-full mb-3 right-8">
-              <span className="text-[2.2rem] font-black tracking-tight text-slate-800">
+            <div className="absolute bottom-full mb-2 right-4">
+              <span className="text-xl font-black tracking-tight text-slate-700">
                 {latestStopName}
               </span>
             </div>
@@ -489,11 +490,29 @@ export default function Home() {
   const [serviceEnded, setServiceEnded] = useState(false)
   const [stopName, setStopName] = useState<string | null>(null)
   const [shortBstopId, setShortBstopId] = useState<string | null>(null)
+  const [winSize, setWinSize] = useState<{ w: number; h: number } | null>(null)
+  const [showDebugOverlay, setShowDebugOverlay] = useState(false)
 
   // Real-time clock
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000)
     return () => clearInterval(t)
+  }, [])
+
+  // Capture viewport size (for kiosk debugging)
+  useEffect(() => {
+    const update = () => setWinSize({ w: window.innerWidth, h: window.innerHeight })
+    update()
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [])
+
+  // 설정값 로드 (showDebugOverlay 등)
+  useEffect(() => {
+    fetch(`${BRIDGE_URL}/api/settings`)
+      .then(r => r.json())
+      .then(json => { if (json.showDebugOverlay) setShowDebugOverlay(true) })
+      .catch(() => {})
   }, [])
 
   // 정류소 이름 + 단축 ID (브리지 기동 직후·재시작 등으로 첫 응답이 비어 있을 수 있어 몇 차례 재시도)
@@ -548,6 +567,12 @@ export default function Home() {
       <PromoArea />
       <FooterTicker />
       <LogPanel />
+      {/* setting.json showDebugOverlay: true 일 때만 표시 */}
+      {showDebugOverlay && winSize && (
+        <div className="fixed bottom-2 left-2 z-[9999] bg-black/70 text-white text-sm font-mono px-3 py-1.5 rounded-lg pointer-events-none">
+          {winSize.w} × {winSize.h} px
+        </div>
+      )}
     </div>
   )
 }

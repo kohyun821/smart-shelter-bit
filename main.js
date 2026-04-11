@@ -14,19 +14,24 @@ const outDir = path.join(__dirname, 'out')
 
 function getWindowSettings() {
   try {
-    const data = fs.readFileSync(path.join(__dirname, 'data', 'setting.json'), 'utf-8')
+    const dataPath = app.isPackaged
+      ? path.join(process.resourcesPath, 'data', 'setting.json')
+      : path.join(__dirname, 'data', 'setting.json')
+    const data = fs.readFileSync(dataPath, 'utf-8')
     const json = JSON.parse(data)
     if (Array.isArray(json) && json.length > 0) {
       return {
-        width: typeof json[0].width === 'number' ? json[0].width : 1280,
-        height: typeof json[0].height === 'number' ? json[0].height : 800,
-        alwaysOnTop: typeof json[0].alwaysOnTop === 'boolean' ? json[0].alwaysOnTop : true
+        width:           typeof json[0].width === 'number'   ? json[0].width        : 1280,
+        height:          typeof json[0].height === 'number'  ? json[0].height       : 800,
+        alwaysOnTop:     typeof json[0].alwaysOnTop === 'boolean' ? json[0].alwaysOnTop : true,
+        hideTaskbar:     typeof json[0].hideTaskbar === 'boolean' ? json[0].hideTaskbar  : false,
+        showDebugOverlay: typeof json[0].showDebugOverlay === 'boolean' ? json[0].showDebugOverlay : false,
       }
     }
   } catch (err) {
     console.warn('Failed to read setting.json for window config:', err.message)
   }
-  return { width: 1280, height: 800, alwaysOnTop: true }
+  return { width: 1280, height: 800, alwaysOnTop: true, hideTaskbar: false, showDebugOverlay: false }
 }
 
 function createWindow() {
@@ -39,6 +44,7 @@ function createWindow() {
     y: 0,
     alwaysOnTop: winSettings.alwaysOnTop,
     frame: false,
+    skipTaskbar: winSettings.hideTaskbar,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -46,6 +52,10 @@ function createWindow() {
     },
     show: false,
   })
+
+  if (winSettings.hideTaskbar) {
+    mainWindow.setKiosk(true)
+  }
 
   mainWindow.once('ready-to-show', () => mainWindow.show())
 

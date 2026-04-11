@@ -36,11 +36,19 @@ let wasConnected = false      // 한 번이라도 연결된 적 있는지 (stopA
 /**
  * data/setting.json에서 첫 번째 stationId를 읽어 반환합니다.
  */
+function getDataDir() {
+  try {
+    const { app } = require('electron')
+    if (app && app.isPackaged) return require('path').join(process.resourcesPath, 'data')
+  } catch {}
+  return require('path').join(__dirname, '..', 'data')
+}
+
 async function getStationId() {
   try {
     const fs = require('fs')
     const path = require('path')
-    const data = fs.readFileSync(path.join(__dirname, '../data/setting.json'), 'utf-8')
+    const data = fs.readFileSync(path.join(getDataDir(), 'setting.json'), 'utf-8')
     const json = JSON.parse(data)
     if (Array.isArray(json) && json.length > 0 && json[0].stationId) {
       return json[0].stationId
@@ -601,6 +609,27 @@ app.get('/api/logs/stream', (req, res) => {
 
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, wsConnected: wsReady, wsUrl, timestamp: new Date().toISOString() })
+})
+
+// ── 설정 조회 (프론트엔드용) ──────────────────────────────────────────────────
+
+/**
+ * GET /api/settings
+ * setting.json에서 프론트엔드가 필요한 설정값을 반환합니다.
+ */
+app.get('/api/settings', (_req, res) => {
+  try {
+    const fs = require('fs')
+    const path = require('path')
+    const dataPath = path.join(getDataDir(), 'setting.json')
+    const json = JSON.parse(fs.readFileSync(dataPath, 'utf-8'))
+    const cfg = Array.isArray(json) && json.length > 0 ? json[0] : {}
+    res.json({
+      showDebugOverlay: typeof cfg.showDebugOverlay === 'boolean' ? cfg.showDebugOverlay : false,
+    })
+  } catch (e) {
+    res.json({ showDebugOverlay: false })
+  }
 })
 
 // ── WebSocket 상태 ─────────────────────────────────────────────────────────────

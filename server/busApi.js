@@ -1,9 +1,19 @@
 'use strict'
 
-require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') })
-
 const fs = require('fs')
 const path = require('path')
+
+// ─── 패키징 여부에 따른 경로 분기 ─────────────────────────────────────────────
+
+function getResourcesPath() {
+  try {
+    const { app } = require('electron')
+    if (app && app.isPackaged) return process.resourcesPath
+  } catch {}
+  return path.join(__dirname, '..')
+}
+
+require('dotenv').config({ path: path.join(getResourcesPath(), '.env') })
 
 // ─── Base URLs (lib/api/bus.ts와 동일하게 유지) ───────────────────────────────
 
@@ -35,7 +45,7 @@ function getServiceKey() {
  * @returns {string}
  */
 function loadBusStopId() {
-  const filePath = path.join(__dirname, '..', 'data', 'setting.json')
+  const filePath = path.join(getResourcesPath(), 'data', 'setting.json')
   try {
     const raw = fs.readFileSync(filePath, 'utf-8')
     const json = JSON.parse(raw)

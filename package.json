@@ -106,6 +106,10 @@
       {
         "from": "config",
         "to": "config"
+      },
+      {
+        "from": ".env",
+        "to": ".env"
       }
     ],
     "npmRebuild": false,
