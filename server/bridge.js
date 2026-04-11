@@ -437,6 +437,7 @@ async function buildArrivalData() {
         isLastBus:     a.LASTBUSYN === '1',
         currentStop,
         totalStops,
+        latestStopName: a.LATEST_STOP_NAME || ''
       }
     })
     .filter(a => a.arrivalSec < 3600)   // 60분 이상 제외

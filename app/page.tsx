@@ -144,6 +144,22 @@ function getRouteColor(routeType: string) {
   return MAIN
 }
 
+function getRouteTypeName(routeType: string) {
+  switch (routeType) {
+    case '0': return '일반' // 정보 없음을 일반으로 취급
+    case '1': return '지선'
+    case '2': return '간선'
+    case '3': return '좌석'
+    case '4': return '광역'
+    case '5': return '리무진'
+    case '6': return '마을버스'
+    case '7': return '순환'
+    case '8': return '급행간선'
+    case '9': return '지선(순환)'
+    default: return '일반'
+  }
+}
+
 // ─── Soon Arriving ────────────────────────────────────────────────────────────
 function SoonArriving({ arrivals }: { arrivals: BusArrival[] }) {
   const soon = arrivals.filter(a => a.arrivalSec <= 180)
@@ -188,43 +204,78 @@ function SoonArriving({ arrivals }: { arrivals: BusArrival[] }) {
 }
 
 // ─── Location progress bar: ●─●─[🚌]─○─○ ─────────────────────────────────
-function LocationBar({ currentStop, totalStops, routeColor }: { currentStop: number; totalStops: number; routeColor: string }) {
-  const MAX_NODES = 9
-  const nodeCount = Math.min(totalStops, MAX_NODES)
-  const ratio = totalStops <= 1 ? 0 : (currentStop - 1) / (totalStops - 1)
-  const busPos = Math.round(ratio * (nodeCount - 1))
+function LocationBar({ currentStop, totalStops, restStopCount }: { currentStop: number; totalStops: number; restStopCount: number }) {
+  const safeRestStopCount = Math.max(0, restStopCount)
+  const isCompressed = safeRestStopCount > 6
+  const nodeCount = 6
+  
+  // Right-to-Left progression. Leftmost node (0) is "1정거장 전"
+  const busPos = isCompressed ? 5 : Math.max(0, safeRestStopCount - 1)
 
   return (
     <div className="flex items-center w-full">
-      {Array.from({ length: nodeCount }, (_, i) => (
-        <div key={i} className="flex items-center flex-1 first:flex-none last:flex-none">
-          {/* Connector line before each node (except first) */}
-          {i > 0 && (
-            <div
-              className="flex-1 h-2"
-              style={{ background: i <= busPos ? routeColor : '#D1D5DB' }}
-            />
-          )}
-          {/* Node */}
-          {i === busPos ? (
-            <span className="text-6xl leading-none select-none drop-shadow-sm -my-6 relative z-10">🚌</span>
-          ) : i < busPos ? (
-            <div className="w-8 h-8 rounded-full shrink-0 shadow-inner z-0" style={{ background: routeColor }} />
-          ) : (
-            <div
-              className="w-8 h-8 rounded-full border-[6px] shrink-0 bg-white shadow-sm z-0"
-              style={{ borderColor: '#D1D5DB' }}
-            />
-          )}
-        </div>
-      ))}
+      {Array.from({ length: nodeCount }, (_, i) => {
+        // If compressed, ellipsis is right after node 0
+        const isLongSeg = isCompressed && i === 1
+        const isFirst = i === 0
+
+        // Node values: 1, 2, 3... moving right. If compressed, node 1..5 map to n-4..n
+        const nodeValue = isCompressed
+          ? (i === 0 ? 1 : safeRestStopCount - (5 - i))
+          : i + 1
+
+        return (
+          <div
+            key={i}
+            className={cn(
+              'flex items-center relative',
+              isFirst ? 'flex-none w-8' : isLongSeg ? 'flex-1' : (isCompressed ? 'flex-none w-[4.5rem]' : 'flex-1'),
+            )}
+          >
+            {/* Connector line before each node (except first) */}
+            {i > 0 && (
+              isLongSeg ? (
+                <div 
+                  className="flex-1 h-2" 
+                  style={{
+                    backgroundImage: 'radial-gradient(circle, #D1D5DB 3px, transparent 3px)',
+                    backgroundSize: '12px 8px',
+                    backgroundPosition: 'center',
+                    backgroundRepeat: 'repeat-x'
+                  }} 
+                />
+              ) : (
+                <div className="flex-1 h-2" style={{ background: '#D1D5DB' }} />
+              )
+            )}
+
+            {/* Node */}
+            <div className="w-8 shrink-0 flex justify-center items-center h-8 relative">
+              {i === busPos ? (
+                <span className="text-6xl leading-none select-none drop-shadow-sm absolute z-10">
+                  🚌
+                </span>
+              ) : (
+                <div
+                  className="w-8 h-8 rounded-full border-[4px] bg-white shadow-sm z-0 flex items-center justify-center"
+                  style={{ borderColor: '#D1D5DB' }}
+                >
+                  <span className="text-[13px] font-black tracking-tighter" style={{ color: '#4B5563', lineHeight: '1' }}>
+                    {nodeValue}
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+        )
+      })}
     </div>
   )
 }
 
 // ─── Route row ────────────────────────────────────────────────────────────────
 function RouteRow({ arrival, zebra }: { arrival: BusArrival; zebra: boolean }) {
-  const { arrivalSec: sec, restStopCount, isLowFloor, isLastBus, routeNo, routeType, currentStop, totalStops } = arrival
+  const { arrivalSec: sec, restStopCount, isLowFloor, isLastBus, routeNo, routeType, currentStop, totalStops, latestStopName } = arrival
   const isImmediate = sec < 60
   const min = Math.floor(sec / 60)
   const isUrgent = sec < 600
@@ -254,21 +305,23 @@ function RouteRow({ arrival, zebra }: { arrival: BusArrival; zebra: boolean }) {
       <div className="flex-1 flex items-center gap-12 min-w-0 pl-6">
         {/* Left: time + badges */}
         <div className="flex items-center gap-8 shrink-0 min-w-[340px]">
-          {isImmediate ? (
-            <span className="font-black animate-pulse tracking-tight" style={{ color: POINT, fontSize: '5rem' }}>
-              곧 도착
-            </span>
-          ) : (
-            <div className="flex items-baseline gap-2">
-              <span
-                className="font-black tabular-nums tracking-tighter"
-                style={{ color: isUrgent ? POINT : MAIN, fontSize: '7.5rem', lineHeight: '1' }}
-              >
-                {min}
+          <div className="w-[17rem] shrink-0 flex items-center justify-start">
+            {isImmediate ? (
+              <span className="font-black animate-pulse tracking-tighter whitespace-nowrap" style={{ color: POINT, fontSize: '6rem' }}>
+                곧 도착
               </span>
-              <span className="text-5xl font-black tracking-tight" style={{ color: isUrgent ? POINT : MAIN }}>분</span>
-            </div>
-          )}
+            ) : (
+              <div className="flex items-baseline gap-2">
+                <span
+                  className="font-black tabular-nums tracking-tighter"
+                  style={{ color: isUrgent ? POINT : MAIN, fontSize: '7.5rem', lineHeight: '1' }}
+                >
+                  {min}
+                </span>
+                <span className="text-5xl font-black tracking-tight whitespace-nowrap" style={{ color: isUrgent ? POINT : MAIN }}>분</span>
+              </div>
+            )}
+          </div>
 
           <div className="flex flex-col gap-4 justify-center">
             <div className="flex items-center gap-3">
@@ -289,17 +342,29 @@ function RouteRow({ arrival, zebra }: { arrival: BusArrival; zebra: boolean }) {
                 </Badge>
               )}
             </div>
-            {!isImmediate && restStopCount > 0 && (
-              <span className="text-3xl text-slate-600 font-extrabold tracking-tight whitespace-nowrap">
-                {restStopCount}정거장 전
+            <div className="flex flex-col gap-1.5 mt-1">
+              {!isImmediate && restStopCount > 0 && (
+                <span className="text-3xl text-slate-800 font-black tracking-tight whitespace-nowrap">
+                  {restStopCount}정거장 전
+                </span>
+              )}
+              <span className="text-2xl font-bold tracking-tight whitespace-nowrap" style={{ color: routeColor }}>
+                {getRouteTypeName(routeType)}
               </span>
-            )}
+            </div>
           </div>
         </div>
 
         {/* Location bar stretches here */}
-        <div className="flex-1 flex items-center pl-12 pr-6">
-          <LocationBar currentStop={currentStop} totalStops={totalStops} routeColor={routeColor} />
+        <div className="flex-1 flex items-center pl-12 pr-6 relative mt-16">
+          {latestStopName && (
+            <div className="absolute bottom-full mb-3 right-8">
+              <span className="text-[2.2rem] font-black tracking-tight text-slate-800">
+                {latestStopName}
+              </span>
+            </div>
+          )}
+          <LocationBar currentStop={currentStop} totalStops={totalStops} restStopCount={restStopCount} />
         </div>
       </div>
     </div>

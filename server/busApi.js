@@ -248,7 +248,7 @@ async function getBusStationNmList(bstopNm, numOfRows = 255) {
 
 const ARRIVAL_FIELDS = [
   'ROUTEID', 'BUSID', 'ARRIVALESTIMATETIME', 'REST_STOP_COUNT',
-  'LOW_TP_CD', 'LASTBUSYN', 'DIRCD',
+  'LOW_TP_CD', 'LASTBUSYN', 'DIRCD', 'LATEST_STOP_ID', 'LATEST_STOP_NAME'
 ]
 
 /**
