@@ -3,6 +3,9 @@ const path = require('path')
 const fs = require('fs')
 require('dotenv').config()
 
+// 키오스크에서 사용자 제스처 없이 오디오 자동 재생 허용 (TTS)
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
+
 const bridge = require('./server/bridge')
 
 protocol.registerSchemesAsPrivileged([

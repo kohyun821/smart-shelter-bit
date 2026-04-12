@@ -192,8 +192,13 @@ function getRouteTypeName(routeType: string) {
 }
 
 // ─── Soon Arriving ────────────────────────────────────────────────────────────
+/** 3분 59초 이하이거나 2정거장 이내 */
+function isSoonArriving(a: BusArrival) {
+  return a.arrivalSec <= 239 || a.restStopCount <= 2
+}
+
 function SoonArriving({ arrivals }: { arrivals: BusArrival[] }) {
-  const soon = arrivals.filter(a => a.arrivalSec <= 180)
+  const soon = arrivals.filter(isSoonArriving)
 
   return (
     <section
@@ -651,6 +656,22 @@ export default function Home() {
       if (pollTimer) clearInterval(pollTimer)
     }
   }, [])
+
+  // TTS — 곧 도착 버스가 있을 때마다 음성 공지 (arrivals 갱신 주기마다)
+  useEffect(() => {
+    const soonRoutes = arrivals
+      .filter(isSoonArriving)
+      .map(a => a.routeNo.replace(/\(.*?\)/g, '').trim()) // 괄호 제거: "13(강화)" → "13"
+    if (soonRoutes.length === 0) return
+
+    const routeText = soonRoutes.length === 1
+      ? `${soonRoutes[0]}번`
+      : `${soonRoutes.slice(0, -1).join('번, ')}번, ${soonRoutes.at(-1)}번`
+    const text = `잠시 후 도착 버스는 ${routeText} 입니다.`
+
+    const audio = new Audio(`${BRIDGE_URL}/api/tts/speak?${new URLSearchParams({ text })}`)
+    audio.play().catch(() => {})
+  }, [arrivals])
 
   // SSE 구독 — 서버에서 20초마다 푸시
   useEffect(() => {

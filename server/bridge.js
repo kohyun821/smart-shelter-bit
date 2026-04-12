@@ -633,6 +633,35 @@ app.get('/api/logs/stream', (req, res) => {
   req.on('close', () => unregisterSseClient(res))
 })
 
+// ── TTS ───────────────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/tts/speak?text=...
+ * msedge-tts로 한국어 음성 합성 → MP3 스트림 반환
+ */
+app.get('/api/tts/speak', async (req, res) => {
+  const text = req.query.text
+  if (!text || typeof text !== 'string' || !text.trim()) {
+    return res.status(400).json({ error: 'text 파라미터가 필요합니다.' })
+  }
+  try {
+    const { MsEdgeTTS, OUTPUT_FORMAT } = require('msedge-tts')
+    const tts = new MsEdgeTTS()
+    await tts.setMetadata('ko-KR-SunHiNeural', OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3)
+    res.set({ 'Content-Type': 'audio/mpeg', 'Cache-Control': 'no-store' })
+    const { audioStream } = tts.toStream(text.trim())
+    audioStream.pipe(res)
+    audioStream.on('error', (err) => {
+      console.warn('[Bridge][TTS] 스트림 오류:', err.message)
+      if (!res.headersSent) res.status(500).end()
+    })
+    console.log(`[Bridge][TTS] 음성 합성: "${text.trim()}"`)
+  } catch (err) {
+    console.warn('[Bridge][TTS] 오류:', err.message)
+    if (!res.headersSent) res.status(500).json({ error: err.message })
+  }
+})
+
 // ── Health ────────────────────────────────────────────────────────────────────
 
 app.get('/api/health', (_req, res) => {
