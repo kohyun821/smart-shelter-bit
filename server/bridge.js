@@ -10,6 +10,7 @@ const cors = require('cors')
 const EventEmitter = require('events')
 const { loadSettings } = require('./loadSettings')
 const busApi = require('./busApi')
+const weatherApi = require('./weatherApi')
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -493,6 +494,33 @@ function stopArrivalPoller() {
   }
 }
 
+// ── 날씨 캐시 및 폴러 ─────────────────────────────────────────────────────────
+
+let weatherCache = null
+let weatherPollTimer = null
+
+async function pollWeather() {
+  try {
+    weatherCache = await weatherApi.fetchWeather()
+    console.log(`[Bridge][Weather] 업데이트: 현재 ${weatherCache.temp}°C, 최저 ${weatherCache.minTemp}°C, 최고 ${weatherCache.maxTemp}°C, SKY=${weatherCache.sky}, PTY=${weatherCache.pty}`)
+  } catch (err) {
+    console.warn('[Bridge][Weather] 날씨 조회 실패:', err.message)
+  }
+}
+
+function startWeatherPoller() {
+  pollWeather()
+  weatherPollTimer = setInterval(pollWeather, 10 * 60 * 1000) // 10분 주기
+  console.log('[Bridge][Weather] 날씨 폴링 시작 (10분 주기)')
+}
+
+function stopWeatherPoller() {
+  if (weatherPollTimer) {
+    clearInterval(weatherPollTimer)
+    weatherPollTimer = null
+  }
+}
+
 // ── 스냅샷 (테스트용 데이터 저장/불러오기) ───────────────────────────────────
 
 const SNAPSHOT_PATH = require('path').join(__dirname, '..', 'data', 'snapshot.json')
@@ -632,6 +660,19 @@ app.get('/api/settings', (_req, res) => {
   }
 })
 
+// ── 날씨 조회 ─────────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/weather
+ * 기상청 단기예보 기반 날씨 정보 (현재 기온, 최저/최고기온, 하늘상태, 강수형태)
+ */
+app.get('/api/weather', (_req, res) => {
+  if (!weatherCache) {
+    return res.status(503).json({ resultCd: '503', resultMsg: '날씨 데이터 준비 중', data: null })
+  }
+  res.json({ resultCd: '200', resultMsg: 'Success', data: weatherCache })
+})
+
 // ── WebSocket 상태 ─────────────────────────────────────────────────────────────
 
 app.get('/api/ws/status', (_req, res) => {
@@ -681,6 +722,9 @@ async function start({ connectWebSocket = true } = {}) {
     console.log(`[Bridge] Listening on http://localhost:${HTTP_PORT}`)
   })
 
+  // 날씨는 버스 초기화와 독립적으로 즉시 시작
+  startWeatherPoller()
+
   await busApi.initBusRoutesAndStops()
   startArrivalPoller()
 
@@ -697,6 +741,7 @@ function stop() {
   clearTimeout(reconnectTimer)
   stopStatusUpdateTimer()
   stopArrivalPoller()
+  stopWeatherPoller()
 
   if (wsClient) {
     wsClient.removeAllListeners()

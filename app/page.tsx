@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Sun } from 'lucide-react'
+import { Sun, Cloud, CloudRain, CloudSnow } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import { LogPanel } from '@/components/log-panel'
@@ -17,6 +17,14 @@ const HEADER_MUTED = 'rgba(232, 234, 246, 0.62)'
 const HEADER_WEATHER = '#FFE082' // 앰버 — 쨍한 노랑보다 네이비와 잘 어울림
 
 // ─── Types ────────────────────────────────────────────────────────────────────
+interface WeatherData {
+  temp: number | null
+  minTemp: number | null
+  maxTemp: number | null
+  sky: number | null  // 1=맑음, 3=구름많음, 4=흐림
+  pty: number         // 0=없음, 1=비, 2=비/눈, 3=눈, 4=소나기
+}
+
 interface BusArrival {
   id: string
   routeNo: string
@@ -37,8 +45,23 @@ function pad2(n: number) {
   return String(n).padStart(2, '0')
 }
 
+// ─── 날씨 아이콘 ──────────────────────────────────────────────────────────────
+function WeatherIcon({ sky, pty }: { sky: number | null; pty: number }) {
+  const iconProps = {
+    className: 'shrink-0 opacity-95' as const,
+    style: { width: 'clamp(1.1rem, 2.6vh, 1.75rem)', height: 'clamp(1.1rem, 2.6vh, 1.75rem)' },
+    strokeWidth: 2.25,
+  }
+  if (pty > 0) {
+    if (pty === 3) return <CloudSnow {...iconProps} />
+    return <CloudRain {...iconProps} />
+  }
+  if (sky === 3 || sky === 4) return <Cloud {...iconProps} />
+  return <Sun {...iconProps} />
+}
+
 // ─── Header ───────────────────────────────────────────────────────────────────
-function BitHeader({ now, stopName, shortBstopId }: { now: Date; stopName: string | null; shortBstopId: string | null }) {
+function BitHeader({ now, stopName, shortBstopId, weather }: { now: Date; stopName: string | null; shortBstopId: string | null; weather: WeatherData | null }) {
   const days = ['일', '월', '화', '수', '목', '금', '토']
   const dateStr = `${now.getFullYear()}.${pad2(now.getMonth() + 1)}.${pad2(now.getDate())} (${days[now.getDay()]})`
   const timeStr = `${pad2(now.getHours())}:${pad2(now.getMinutes())}`
@@ -94,16 +117,23 @@ function BitHeader({ now, stopName, shortBstopId }: { now: Date; stopName: strin
 
       {/* 1/3 — weather + date / time (세로 균등 배치로 띠 높이 활용) */}
       <div className="flex min-w-0 min-h-0 flex-col items-center justify-evenly text-center py-[0.75vh]">
-        <div
-          className="flex items-center justify-center gap-[0.6vh] font-bold tabular-nums leading-none"
-          style={{ color: HEADER_WEATHER, fontSize: 'clamp(1rem, 2.6vh, 1.65rem)' }}
-        >
-          <Sun
-            className="shrink-0 opacity-95"
-            style={{ width: 'clamp(1.15rem, 2.8vh, 1.85rem)', height: 'clamp(1.15rem, 2.8vh, 1.85rem)' }}
-            strokeWidth={2.25}
-          />
-          <span>12°C</span>
+        {/* 날씨 아이콘 + 현재 기온 + 최저~최고 기온 */}
+        <div className="flex flex-col items-center gap-[0.25vh] leading-none">
+          <div
+            className="flex items-center justify-center gap-[0.5vh] font-bold tabular-nums"
+            style={{ color: HEADER_WEATHER, fontSize: 'clamp(0.9rem, 2.3vh, 1.5rem)' }}
+          >
+            <WeatherIcon sky={weather?.sky ?? null} pty={weather?.pty ?? 0} />
+            <span>{weather?.temp != null ? `${Math.round(weather.temp)}°C` : '—'}</span>
+          </div>
+          <div
+            className="tabular-nums font-medium"
+            style={{ color: HEADER_MUTED, fontSize: 'clamp(0.6rem, 1.5vh, 0.9rem)' }}
+          >
+            {weather?.minTemp != null && weather?.maxTemp != null
+              ? `${Math.round(weather.minTemp)}° ~ ${Math.round(weather.maxTemp)}°`
+              : '최저 ~ 최고'}
+          </div>
         </div>
         <p
           className="font-semibold leading-tight px-1"
@@ -533,6 +563,7 @@ export default function Home() {
   const [serviceEnded, setServiceEnded] = useState(false)
   const [stopName, setStopName] = useState<string | null>(null)
   const [shortBstopId, setShortBstopId] = useState<string | null>(null)
+  const [weather, setWeather] = useState<WeatherData | null>(null)
   const [winSize, setWinSize] = useState<{ w: number; h: number } | null>(null)
   const [showDebugOverlay, setShowDebugOverlay] = useState(false)
 
@@ -585,6 +616,42 @@ export default function Home() {
     }
   }, [])
 
+  // 날씨 정보 로드 — 서버 준비 전이면 3초마다 재시도, 성공 후 10분 주기 갱신
+  useEffect(() => {
+    let cancelled = false
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
+    let pollTimer: ReturnType<typeof setInterval> | null = null
+
+    const tryLoad = async () => {
+      try {
+        const r = await fetch(`${BRIDGE_URL}/api/weather`)
+        const json = await r.json()
+        if (cancelled) return
+        if (json.data) {
+          setWeather(json.data)
+          // 성공 시 10분 주기 갱신 시작
+          pollTimer = setInterval(async () => {
+            try {
+              const r2 = await fetch(`${BRIDGE_URL}/api/weather`)
+              const j2 = await r2.json()
+              if (!cancelled && j2.data) setWeather(j2.data)
+            } catch { /* noop */ }
+          }, 10 * 60 * 1000)
+          return
+        }
+      } catch { /* noop */ }
+      // 데이터 없으면 3초 후 재시도
+      if (!cancelled) retryTimer = setTimeout(tryLoad, 3000)
+    }
+
+    void tryLoad()
+    return () => {
+      cancelled = true
+      if (retryTimer) clearTimeout(retryTimer)
+      if (pollTimer) clearInterval(pollTimer)
+    }
+  }, [])
+
   // SSE 구독 — 서버에서 20초마다 푸시
   useEffect(() => {
     const es = new EventSource(`${BRIDGE_URL}/api/bus/arrivals/stream`)
@@ -604,7 +671,7 @@ export default function Home() {
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      <BitHeader now={now} stopName={stopName} shortBstopId={shortBstopId} />
+      <BitHeader now={now} stopName={stopName} shortBstopId={shortBstopId} weather={weather} />
       <SoonArriving arrivals={arrivals} />
       <MainList arrivals={arrivals} serviceEnded={serviceEnded} />
       <PromoArea />
