@@ -167,35 +167,35 @@ function SoonArriving({ arrivals }: { arrivals: BusArrival[] }) {
 
   return (
     <section
-      className="shrink-0 flex items-center gap-8 px-10"
-      style={{ background: SUB, height: '12vh' }}
+      className="shrink-0 flex items-center gap-5 px-6"
+      style={{ background: SUB, height: '6.5vh' }}
     >
-      <div className="flex items-center gap-4 shrink-0">
-        <span className="relative flex h-6 w-6">
+      <div className="flex items-center gap-3 shrink-0">
+        <span className="relative flex h-5 w-5">
           <span
             className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75"
             style={{ background: POINT }}
           />
-          <span className="relative inline-flex rounded-full h-6 w-6" style={{ background: POINT }} />
+          <span className="relative inline-flex rounded-full h-5 w-5" style={{ background: POINT }} />
         </span>
-        <span className="text-3xl font-black tracking-[0.15em] uppercase" style={{ color: MAIN }}>
+        <span className="text-2xl font-black tracking-[0.1em] uppercase whitespace-nowrap" style={{ color: MAIN }}>
           곧 도착
         </span>
       </div>
-      <div className="w-1.5 h-12 rounded-full" style={{ background: `${MAIN}30` }} />
-      <div className="flex flex-wrap gap-4">
+      <div className="w-1 h-8 rounded-full" style={{ background: `${MAIN}30` }} />
+      <div className="flex flex-wrap gap-3">
         {soon.length > 0 ? (
           soon.map(a => (
             <Badge
               key={a.id}
-              className="rounded-full text-white text-3xl font-black px-8 py-2.5 border-0 shadow-sm"
+              className="rounded-full text-white text-2xl font-black px-6 py-2 border-0 shadow-sm"
               style={{ background: getRouteColor(a.routeType) }}
             >
               {a.routeNo.replace(/\s*\(.*?\)\s*/g, '')}
             </Badge>
           ))
         ) : (
-          <span className="text-3xl font-bold" style={{ color: `${MAIN}60` }}>
+          <span className="text-2xl font-bold" style={{ color: `${MAIN}60` }}>
             3분 이내 도착 예정 버스 없음
           </span>
         )}
@@ -305,17 +305,17 @@ function RouteRow({ arrival, zebra }: { arrival: BusArrival; zebra: boolean }) {
       {/* Middle — arrival time + badges + location bar */}
       <div className="flex-1 flex items-center gap-6 min-w-0 pl-2">
         {/* Left: time + badges */}
-        <div className="flex items-center gap-4 shrink-0 min-w-[240px]">
-          <div className="w-[12rem] shrink-0 flex items-center justify-start">
+        <div className="flex items-center gap-3 shrink-0 min-w-[200px]">
+          <div className="w-[10rem] shrink-0 flex items-center justify-start">
             {isImmediate ? (
-              <span className="font-black animate-pulse tracking-tighter whitespace-nowrap" style={{ color: POINT, fontSize: '3.8rem' }}>
+              <span className="font-black animate-pulse tracking-tighter whitespace-nowrap" style={{ color: POINT, fontSize: '3.2rem' }}>
                 곧 도착
               </span>
             ) : (
               <div className="flex items-baseline gap-1">
                 <span
                   className="font-black tabular-nums tracking-tighter"
-                  style={{ color: isUrgent ? POINT : MAIN, fontSize: '5rem', lineHeight: '1' }}
+                  style={{ color: isUrgent ? POINT : MAIN, fontSize: '4.8rem', lineHeight: '1' }}
                 >
                   {min}
                 </span>
@@ -324,7 +324,7 @@ function RouteRow({ arrival, zebra }: { arrival: BusArrival; zebra: boolean }) {
             )}
           </div>
 
-          <div className="flex flex-col gap-2 justify-center">
+          <div className="flex flex-col gap-1.5 justify-center">
             <div className="flex items-center gap-2">
               {isLowFloor && (
                 <Badge
@@ -374,10 +374,34 @@ function RouteRow({ arrival, zebra }: { arrival: BusArrival; zebra: boolean }) {
 
 // ─── Main list ────────────────────────────────────────────────────────────────
 function MainList({ arrivals, serviceEnded }: { arrivals: BusArrival[]; serviceEnded: boolean }) {
+  const [page, setPage] = useState(0)
+  const itemsPerPage = 5
+
+  useEffect(() => {
+    if (arrivals.length <= itemsPerPage) {
+      setPage(0)
+      return
+    }
+    const t = setInterval(() => {
+      setPage(p => {
+        const totalPages = Math.ceil(arrivals.length / itemsPerPage)
+        return (p + 1) % totalPages
+      })
+    }, 10000) // 10 seconds active duration per page
+    return () => clearInterval(t)
+  }, [arrivals.length, itemsPerPage])
+
+  useEffect(() => {
+    const totalPages = Math.ceil(arrivals.length / itemsPerPage)
+    if (page >= totalPages && totalPages > 0) {
+      setPage(0)
+    }
+  }, [arrivals.length, page, itemsPerPage])
+
   if (serviceEnded) {
     return (
       <section
-        className="flex-1 flex flex-col items-center justify-center gap-4"
+        className="flex-1 flex flex-col items-center justify-center gap-4 py-10"
         style={{ background: '#F1F3FA' }}
       >
         <div
@@ -396,12 +420,31 @@ function MainList({ arrivals, serviceEnded }: { arrivals: BusArrival[]; serviceE
     )
   }
 
+  const startIndex = page * itemsPerPage
+  const visibleArrivals = arrivals.slice(startIndex, Math.min(startIndex + itemsPerPage, arrivals.length))
+  const totalPages = Math.ceil(arrivals.length / itemsPerPage)
+
   return (
     <section
-      className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-2"
+      className="flex-1 px-4 py-3 flex flex-col gap-2 relative transition-all duration-300 overflow-hidden"
       style={{ background: '#F1F3FA' }}
     >
-      {arrivals.map((a, i) => (
+      {/* Page indicator dot system */}
+      {totalPages > 1 && (
+        <div className="absolute top-1 right-6 flex gap-1.5 z-10 p-1">
+          {Array.from({ length: totalPages }).map((_, i) => (
+            <div
+              key={i}
+              className={cn(
+                "w-2.5 h-2.5 rounded-full transition-colors",
+                i === page ? "bg-[#1A237E]" : "bg-[#1A237E]/20"
+              )}
+            />
+          ))}
+        </div>
+      )}
+
+      {visibleArrivals.map((a, i) => (
         <RouteRow key={a.id} arrival={a} zebra={i % 2 === 0} />
       ))}
     </section>
@@ -432,17 +475,17 @@ function PromoArea() {
 
   return (
     <section
-      className="shrink-0 mx-4 mb-3 rounded-2xl overflow-hidden flex items-center justify-center"
-      style={{ height: '18vh' }}
+      className="shrink-0 mx-4 mb-3 rounded-[2rem] overflow-hidden flex items-center justify-center shadow-lg"
+      style={{ background: '#ffffff', height: '30vh' }}
     >
       <div
-        className="w-full h-full flex items-center justify-center px-8 transition-opacity duration-400"
+        className="w-full h-full flex items-center justify-center px-10 transition-opacity duration-400"
         style={{
           background: PROMO_SLIDES[idx].gradient,
           opacity: visible ? 1 : 0,
         }}
       >
-        <p className="text-white font-black text-center" style={{ fontSize: 'clamp(1rem, 2vw, 1.5rem)' }}>
+        <p className="text-white font-black text-center break-keep" style={{ fontSize: 'clamp(2rem, 5.5vh, 4rem)', textShadow: '0 3px 6px rgba(0,0,0,0.3)' }}>
           {PROMO_SLIDES[idx].text}
         </p>
       </div>
