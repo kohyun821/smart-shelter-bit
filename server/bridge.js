@@ -35,7 +35,7 @@ let statusUpdateTimer = null  // 5분 주기 status:update 타이머
 let wasConnected = false      // 한 번이라도 연결된 적 있는지 (stopAll 조건 판단용)
 
 /**
- * data/setting.json에서 첫 번째 stationId를 읽어 반환합니다.
+ * data/setting.json에서 패키징 여부에 따른 data 디렉토리 경로를 반환합니다.
  */
 function getDataDir() {
   try {
@@ -45,17 +45,20 @@ function getDataDir() {
   return require('path').join(__dirname, '..', 'data')
 }
 
+/**
+ * data/setting.json에서 shelter_id를 읽어 반환합니다.
+ */
 async function getStationId() {
   try {
     const fs = require('fs')
     const path = require('path')
     const data = fs.readFileSync(path.join(getDataDir(), 'setting.json'), 'utf-8')
     const json = JSON.parse(data)
-    if (Array.isArray(json) && json.length > 0 && json[0].stationId) {
-      return json[0].stationId
+    if (Array.isArray(json) && json.length > 0 && json[0].shelter_id) {
+      return json[0].shelter_id
     }
   } catch (err) {
-    console.warn('[Bridge][WS] stationId 읽기 실패:', err.message)
+    console.warn('[Bridge][WS] shelter_id 읽기 실패:', err.message)
   }
   return 'UNKNOWN'
 }
@@ -157,6 +160,226 @@ function stopStatusUpdateTimer() {
   if (statusUpdateTimer) {
     clearInterval(statusUpdateTimer)
     statusUpdateTimer = null
+  }
+}
+
+// ─── BIT WebSocket (홍보 시나리오) ────────────────────────────────────────────
+
+let bitWsClient = null
+let bitWsReady = false
+let bitWsUrl = ''
+let bitWsReconnectTimer = null
+let bitWsReconnectDelay = 1000
+let bitWsReconnectAttempt = 0
+
+/** 현재 활성 프로모 시나리오 */
+let currentPromoScenario = null
+const promoSseClients = new Set()
+
+function pushPromoSSE(data) {
+  const chunk = `event: promo\ndata: ${JSON.stringify(data)}\n\n`
+  for (const res of promoSseClients) {
+    try { res.write(chunk) } catch { promoSseClients.delete(res) }
+  }
+}
+
+function connectBitWS() {
+  if (bitWsClient) {
+    bitWsClient.removeAllListeners()
+    bitWsClient.terminate()
+  }
+  if (bitWsReconnectAttempt === 0 || bitWsReconnectAttempt % 10 === 0) {
+    console.log(`[Bridge][BitWS] Connecting to ${bitWsUrl} ...${bitWsReconnectAttempt > 0 ? ` (재시도 ${bitWsReconnectAttempt}회)` : ''}`)
+  }
+  bitWsClient = new WebSocket(bitWsUrl)
+
+  bitWsClient.on('open', () => {
+    if (bitWsReconnectAttempt > 0) {
+      console.log(`[Bridge][BitWS] 재연결 성공 (${bitWsReconnectAttempt}회 시도 후)`)
+    } else {
+      console.log('[Bridge][BitWS] Connected')
+    }
+    bitWsReady = true
+    bitWsReconnectDelay = 1000
+    bitWsReconnectAttempt = 0
+    sendBitWS({ type: 'booting' })
+  })
+
+  bitWsClient.on('message', (data) => {
+    try {
+      const msg = JSON.parse(data.toString())
+      console.log('[Bridge][BitWS] ←', JSON.stringify(msg).slice(0, 300))
+      handleBitWsMessage(msg)
+    } catch {
+      console.warn('[Bridge][BitWS] Non-JSON:', data.toString().slice(0, 100))
+    }
+  })
+
+  bitWsClient.on('close', (code) => {
+    bitWsReady = false
+    bitWsReconnectAttempt++
+    if (bitWsReconnectAttempt <= 3 || bitWsReconnectAttempt % 10 === 0) {
+      console.warn(`[Bridge][BitWS] 연결 끊김 (${code}). ${bitWsReconnectDelay}ms 후 재시도 ...`)
+    }
+    scheduleBitWsReconnect()
+  })
+
+  bitWsClient.on('error', (err) => {
+    if (bitWsReconnectAttempt <= 1) {
+      console.warn('[Bridge][BitWS] 연결 오류:', err.message)
+    }
+  })
+}
+
+function scheduleBitWsReconnect() {
+  clearTimeout(bitWsReconnectTimer)
+  bitWsReconnectTimer = setTimeout(() => {
+    bitWsReconnectDelay = Math.min(bitWsReconnectDelay * 2, 30_000)
+    connectBitWS()
+  }, bitWsReconnectDelay)
+}
+
+function sendBitWS(payload) {
+  if (!bitWsClient || !bitWsReady) return
+  bitWsClient.send(JSON.stringify(payload))
+  console.log('[Bridge][BitWS] →', JSON.stringify(payload))
+}
+
+// ─── 홍보 시나리오 오프라인 캐시 ─────────────────────────────────────────────
+
+function getPromoScenarioPath() {
+  return require('path').join(getDataDir(), 'promo-scenario.json')
+}
+
+function getPromoMediaDir() {
+  return require('path').join(getDataDir(), 'promo-media')
+}
+
+/**
+ * 원격 미디어 파일을 로컬 경로에 다운로드합니다.
+ * 이미 존재하면 skip합니다.
+ */
+async function downloadMediaFile(mediaUrl, destPath) {
+  const fs = require('fs')
+  if (fs.existsSync(destPath)) return
+  const res = await fetch(mediaUrl)
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  const buf = Buffer.from(await res.arrayBuffer())
+  fs.writeFileSync(destPath, buf)
+}
+
+/**
+ * promo:scenario 페이로드를 수신하면
+ * 미디어 파일을 로컬에 다운로드하고, 로컬 URL로 교체한 뒤 JSON 파일로 저장합니다.
+ * @param {object} scenario
+ * @returns {Promise<object>} 로컬 URL이 반영된 시나리오
+ */
+async function savePromoScenarioToFile(scenario) {
+  const fs = require('fs')
+  const pathMod = require('path')
+  const mediaDir = getPromoMediaDir()
+  if (!fs.existsSync(mediaDir)) fs.mkdirSync(mediaDir, { recursive: true })
+
+  const localBlocks = await Promise.all(
+    scenario.blocks.map(async (block) => {
+      try {
+        const urlPathname = new URL(block.mediaUrl).pathname
+        const ext = pathMod.extname(urlPathname) || (block.fileType === 'video' ? '.mp4' : '.jpg')
+        const filename = `${scenario.scenarioId}_${block.sortOrder}${ext}`
+        await downloadMediaFile(block.mediaUrl, pathMod.join(mediaDir, filename))
+        return { ...block, mediaUrl: `http://localhost:${HTTP_PORT}/api/promo/media/${filename}` }
+      } catch (err) {
+        console.warn(`[Bridge][Promo] 미디어 다운로드 실패 (sortOrder=${block.sortOrder}): ${err.message}`)
+        return block  // 실패 시 원본 URL 유지
+      }
+    })
+  )
+
+  const toSave = { ...scenario, blocks: localBlocks }
+  fs.writeFileSync(getPromoScenarioPath(), JSON.stringify(toSave, null, 2), 'utf-8')
+  console.log(`[Bridge][Promo] 시나리오 캐시 저장 완료: ${scenario.scenarioId} (미디어 ${localBlocks.length}개)`)
+  return toSave
+}
+
+/**
+ * 저장된 시나리오 파일을 로드해 currentPromoScenario를 복원합니다.
+ * 파일이 없으면 조용히 무시합니다.
+ */
+function loadPromoScenarioFromFile() {
+  const fs = require('fs')
+  try {
+    const p = getPromoScenarioPath()
+    if (!fs.existsSync(p)) return
+    const scenario = JSON.parse(fs.readFileSync(p, 'utf-8'))
+    currentPromoScenario = scenario
+    console.log(`[Bridge][Promo] 오프라인 캐시 로드: ${scenario.scenarioId} (${scenario.scenarioNm})`)
+  } catch (err) {
+    console.warn('[Bridge][Promo] 캐시 로드 실패:', err.message)
+  }
+}
+
+/**
+ * 저장된 시나리오 캐시 파일을 삭제합니다.
+ */
+function clearPromoScenarioFile() {
+  try {
+    const fs = require('fs')
+    const p = getPromoScenarioPath()
+    if (fs.existsSync(p)) fs.unlinkSync(p)
+  } catch {}
+}
+
+function handleBitWsMessage(msg) {
+  if (msg.type === 'booting_ack') {
+    const serverScenarioId = msg.scenarioId
+    if (!serverScenarioId) {
+      console.log('[Bridge][BitWS] booting_ack: 배정된 시나리오 없음')
+      if (currentPromoScenario) {
+        currentPromoScenario = null
+        clearPromoScenarioFile()
+        pushPromoSSE({ type: 'stop', scenarioId: null })
+      }
+    } else if (serverScenarioId === currentPromoScenario?.scenarioId) {
+      console.log(`[Bridge][BitWS] booting_ack: 시나리오 최신 (${serverScenarioId})`)
+    } else {
+      console.log(`[Bridge][BitWS] booting_ack: 시나리오 요청 → ${serverScenarioId}`)
+      sendBitWS({ type: 'scenario_request', scenarioId: serverScenarioId })
+    }
+    return
+  }
+
+  if (msg.type === 'promo:scenario') {
+    // 즉시 메모리 반영 + SSE 전송 (원본 URL로 우선 표출)
+    currentPromoScenario = msg
+    pushPromoSSE({ type: 'scenario', data: msg })
+    sendBitWS({ type: 'promo:ack', scenarioId: msg.scenarioId })
+    console.log(`[Bridge][BitWS] 시나리오 수신: ${msg.scenarioId} (${msg.scenarioNm})`)
+
+    // 백그라운드: 미디어 다운로드 후 로컬 URL로 캐시 저장
+    savePromoScenarioToFile(msg)
+      .then(localScenario => {
+        currentPromoScenario = localScenario
+        if (promoSseClients.size > 0) {
+          pushPromoSSE({ type: 'scenario', data: localScenario })
+        }
+      })
+      .catch(err => console.warn('[Bridge][Promo] 캐시 저장 실패:', err.message))
+    return
+  }
+
+  if (msg.type === 'promo:stop') {
+    if (currentPromoScenario?.scenarioId === msg.scenarioId) {
+      currentPromoScenario = null
+      clearPromoScenarioFile()
+      pushPromoSSE({ type: 'stop', scenarioId: msg.scenarioId })
+      console.log(`[Bridge][BitWS] 시나리오 중지: ${msg.scenarioId}`)
+    }
+    return
+  }
+
+  if (msg.type === 'status:pong') {
+    console.log('[Bridge][BitWS] status:pong 수신')
+    return
   }
 }
 
@@ -702,6 +925,60 @@ app.get('/api/weather', (_req, res) => {
   res.json({ resultCd: '200', resultMsg: 'Success', data: weatherCache })
 })
 
+// ── 홍보 시나리오 ─────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/promo/current
+ * 현재 활성 프로모 시나리오 반환 (없으면 null)
+ */
+app.get('/api/promo/current', (_req, res) => {
+  res.json({ resultCd: '200', data: currentPromoScenario })
+})
+
+/**
+ * GET /api/promo/stream
+ * 프로모 시나리오 변경 SSE — 연결 즉시 현재 시나리오 전송
+ * event: promo  data: { type: 'scenario', data: {...} } | { type: 'stop', scenarioId: '...' }
+ */
+app.get('/api/promo/stream', (req, res) => {
+  res.set({
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  })
+  res.flushHeaders()
+
+  // 연결 즉시 현재 시나리오 전송 (빈 화면 방지)
+  if (currentPromoScenario) {
+    res.write(`event: promo\ndata: ${JSON.stringify({ type: 'scenario', data: currentPromoScenario })}\n\n`)
+  }
+
+  promoSseClients.add(res)
+  console.log(`[Bridge][Promo] SSE 클라이언트 연결 (총 ${promoSseClients.size}개)`)
+
+  req.on('close', () => {
+    promoSseClients.delete(res)
+    console.log(`[Bridge][Promo] SSE 클라이언트 해제 (총 ${promoSseClients.size}개)`)
+  })
+})
+
+/**
+ * GET /api/promo/media/:filename
+ * 로컬에 캐시된 홍보 미디어 파일을 반환합니다.
+ */
+app.get('/api/promo/media/:filename', (req, res) => {
+  const fs = require('fs')
+  const pathMod = require('path')
+  const filename = req.params.filename
+  // 경로 탐색 방지
+  if (!filename || filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+    return res.status(400).end()
+  }
+  const filePath = pathMod.join(getPromoMediaDir(), filename)
+  if (!fs.existsSync(filePath)) return res.status(404).end()
+  res.sendFile(filePath)
+})
+
 // ── WebSocket 상태 ─────────────────────────────────────────────────────────────
 
 app.get('/api/ws/status', (_req, res) => {
@@ -744,6 +1021,9 @@ app.get('/api/events', (req, res) => {
 const server = http.createServer(app)
 
 async function start({ connectWebSocket = true } = {}) {
+  // 오프라인 캐시 복원 (서버 연결 전에 먼저 로드)
+  loadPromoScenarioFromFile()
+
   // Step 0 완료 후 listen — 그 전에 요청이 들어오면 bstopNm 캐시가 비어 null이 반환됨
   await busApi.initStopMetaOnly()
 
@@ -764,6 +1044,14 @@ async function start({ connectWebSocket = true } = {}) {
     // console.log(`[Bridge][WS] 대상 URL: ${wsUrl} (stationId: ${stationId})`)
     // connectWS()
   }
+
+  // BIT WebSocket (홍보 시나리오) 연결
+  const stationId = await getStationId()
+  const wsHost = settings.websocket?.host || 'localhost'
+  const wsPort = settings.websocket?.port || 1470
+  bitWsUrl = `ws://${wsHost}:${wsPort}/ws/bit/${stationId}`
+  console.log(`[Bridge][BitWS] 대상 URL: ${bitWsUrl} (stationId: ${stationId})`)
+  connectBitWS()
 }
 
 function stop() {
@@ -777,10 +1065,18 @@ function stop() {
     wsClient.terminate()
   }
 
+  clearTimeout(bitWsReconnectTimer)
+  if (bitWsClient) {
+    bitWsClient.removeAllListeners()
+    bitWsClient.terminate()
+  }
+
   for (const res of sseClients) res.end()
   sseClients.clear()
   for (const res of arrivalSseClients) res.end()
   arrivalSseClients.clear()
+  for (const res of promoSseClients) res.end()
+  promoSseClients.clear()
 
   server.close()
   console.log('[Bridge] Stopped')

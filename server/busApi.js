@@ -121,23 +121,13 @@ async function getBusStationViaRouteList(bstopId, pageNo = 1, numOfRows = 100) {
   const serviceKey = getServiceKey()
   const url = `${BASE_STATION_URL}/getBusStationViaRouteList?serviceKey=${serviceKey}&bstopId=${bstopId}&pageNo=${pageNo}&numOfRows=${numOfRows}`
 
-  console.log(`[BusApi] ▶ GET getBusStationViaRouteList  bstopId=${bstopId}  pageNo=${pageNo}  numOfRows=${numOfRows}`)
-
-  const t0 = Date.now()
   const response = await fetch(url)
-  const elapsed = Date.now() - t0
-
-  console.log(`[BusApi] ◀ HTTP ${response.status} (${elapsed}ms)`)
   if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
 
   const xml = await response.text()
   const routes = parseXml(xml, ROUTE_FIELDS)
 
-  console.log(`[BusApi] ✔ 파싱 완료: ${routes.length}개 노선`)
-  routes.forEach((r, i) => {
-    const dir = r.DIRCD === '0' ? '상행' : r.DIRCD === '1' ? '하행' : '순환'
-    console.log(`[BusApi]   [${String(i + 1).padStart(2)}] ${r.ROUTENO.padEnd(10)} ROUTEID=${r.ROUTEID}  PATHSEQ=${r.PATHSEQ}    BSTOPSEQ=${r.BSTOPSEQ}    방향=${dir}  종점=${r.DESTINATION}`)
-  })
+  console.log(`[BusApi] ✔ 경유 노선 ${routes.length}개: ${routes.map(r => r.ROUTENO).join(', ')}`)
 
   return routes
 }
@@ -156,13 +146,7 @@ async function getBusRouteSectionList(routeId, myBstopSeq, numOfRows = 500) {
   const serviceKey = getServiceKey()
   const url = `${BASE_ROUTE_URL}/getBusRouteSectionList?serviceKey=${serviceKey}&routeId=${routeId}&pageNo=1&numOfRows=${numOfRows}`
 
-  console.log(`[BusApi]   ▶ GET getBusRouteSectionList  routeId=${routeId}  (myBstopSeq≤${myBstopSeq})`)
-
-  const t0 = Date.now()
   const response = await fetch(url)
-  const elapsed = Date.now() - t0
-
-  console.log(`[BusApi]   ◀ HTTP ${response.status} (${elapsed}ms)`)
   if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
 
   const xml = await response.text()
@@ -170,8 +154,6 @@ async function getBusRouteSectionList(routeId, myBstopSeq, numOfRows = 500) {
 
   // 내 정류소(BSTOPSEQ) 이하만 보존
   const stops = allStops.filter(s => parseInt(s.BSTOPSEQ) <= myBstopSeq)
-
-  console.log(`[BusApi]   ✔ 전체 ${allStops.length}개 정류소 → 내 정류소까지 ${stops.length}개 저장`)
 
   return stops
 }
@@ -187,13 +169,7 @@ async function getBusRouteId(routeId) {
   const serviceKey = getServiceKey()
   const url = `${BASE_ROUTE_URL}/getBusRouteId?serviceKey=${serviceKey}&routeId=${routeId}&pageNo=1&numOfRows=1`
 
-  console.log(`[BusApi]   ▶ GET getBusRouteId  routeId=${routeId}`)
-
-  const t0 = Date.now()
   const response = await fetch(url)
-  const elapsed = Date.now() - t0
-
-  console.log(`[BusApi]   ◀ HTTP ${response.status} (${elapsed}ms)`)
   if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
 
   const xml = await response.text()
@@ -213,13 +189,7 @@ async function getBusStationIdList(bstopId) {
   const serviceKey = getServiceKey()
   const url = `${BASE_STATION_URL}/getBusStationIdList?serviceKey=${serviceKey}&bstopId=${bstopId}&pageNo=1&numOfRows=1`
 
-  console.log(`[BusApi] ▶ GET getBusStationIdList  bstopId=${bstopId}`)
-
-  const t0 = Date.now()
   const response = await fetch(url)
-  const elapsed = Date.now() - t0
-
-  console.log(`[BusApi] ◀ HTTP ${response.status} (${elapsed}ms)`)
   if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
 
   const xml = await response.text()
@@ -241,13 +211,7 @@ async function getBusStationNmList(bstopNm, numOfRows = 255) {
   const serviceKey = getServiceKey()
   const url = `${BASE_STATION_URL}/getBusStationNmList?serviceKey=${serviceKey}&bstopNm=${encodeURIComponent(bstopNm)}&pageNo=1&numOfRows=${numOfRows}`
 
-  console.log(`[BusApi] ▶ GET getBusStationNmList  bstopNm=${bstopNm}`)
-
-  const t0 = Date.now()
   const response = await fetch(url)
-  const elapsed = Date.now() - t0
-
-  console.log(`[BusApi] ◀ HTTP ${response.status} (${elapsed}ms)`)
   if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
 
   const xml = await response.text()
@@ -270,13 +234,7 @@ async function fetchAllRouteBusArrivalList(bstopId) {
   const serviceKey = getServiceKey()
   const url = `${BASE_ARRIVAL_URL}/getAllRouteBusArrivalList?serviceKey=${serviceKey}&bstopId=${bstopId}&pageNo=1&numOfRows=100`
 
-  console.log(`[BusApi] ▶ GET getAllRouteBusArrivalList  bstopId=${bstopId}`)
-
-  const t0 = Date.now()
   const response = await fetch(url)
-  const elapsed = Date.now() - t0
-
-  console.log(`[BusApi] ◀ HTTP ${response.status} (${elapsed}ms)`)
   if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
 
   const xml = await response.text()

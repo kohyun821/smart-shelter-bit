@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Sun, Cloud, CloudRain, CloudSnow } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
@@ -25,6 +25,22 @@ interface WeatherData {
   pty: number         // 0=없음, 1=비, 2=비/눈, 3=눈, 4=소나기
 }
 
+interface PromoBlock {
+  sortOrder: number
+  displaySec: number
+  fileType: 'image' | 'video'
+  mediaUrl: string
+  broadcastStart: string | null
+  broadcastEnd: string | null
+}
+
+interface PromoScenario {
+  scenarioId: string
+  scenarioNm: string
+  tickerText: string | null
+  blocks: PromoBlock[]
+}
+
 interface BusArrival {
   id: string
   routeNo: string
@@ -43,6 +59,32 @@ const BRIDGE_URL = 'http://localhost:4000'
 // ─── Utilities ────────────────────────────────────────────────────────────────
 function pad2(n: number) {
   return String(n).padStart(2, '0')
+}
+
+/** 아라비아 숫자 문자열을 한자어 읽기로 변환 (32 → "삼십이", 48 → "사십팔") */
+function toSinoKorean(numStr: string): string {
+  const n = parseInt(numStr, 10)
+  if (isNaN(n) || n <= 0) return numStr
+  const d = ['', '일', '이', '삼', '사', '오', '육', '칠', '팔', '구']
+  const h = Math.floor(n / 100)
+  const t = Math.floor((n % 100) / 10)
+  const o = n % 10
+  let r = ''
+  if (h === 1) r += '백'
+  else if (h > 1) r += d[h] + '백'
+  if (t === 1) r += '십'
+  else if (t > 1) r += d[t] + '십'
+  if (o > 0) r += d[o]
+  return r + numStr.replace(/^\d+/, '') // 숫자 뒤 문자 (예: "A") 보존
+}
+
+/** 오늘 날짜가 broadcastStart ~ broadcastEnd 범위 내인지 확인 (로컬 시간 기준) */
+function isBlockActive(block: PromoBlock): boolean {
+  const d = new Date()
+  const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  if (block.broadcastStart && today < block.broadcastStart) return false
+  if (block.broadcastEnd && today > block.broadcastEnd) return false
+  return true
 }
 
 // ─── 날씨 아이콘 ──────────────────────────────────────────────────────────────
@@ -214,7 +256,7 @@ function SoonArriving({ arrivals }: { arrivals: BusArrival[] }) {
           <span className="relative inline-flex rounded-full h-5 w-5" style={{ background: POINT }} />
         </span>
         <span className="text-2xl font-black tracking-[0.1em] uppercase whitespace-nowrap" style={{ color: MAIN }}>
-          곧 도착
+          잠시 후 도착
         </span>
       </div>
       <div className="w-1 h-8 rounded-full" style={{ background: `${MAIN}30` }} />
@@ -493,35 +535,84 @@ const PROMO_SLIDES = [
   { text: '강화 역사관  매일 09:00 ~ 18:00', gradient: `linear-gradient(135deg, ${MAIN}, #3949AB)` },
 ]
 
-function PromoArea() {
+function PromoArea({ scenario }: { scenario: PromoScenario | null }) {
   const [idx, setIdx] = useState(0)
   const [visible, setVisible] = useState(true)
 
-  useEffect(() => {
-    const t = setInterval(() => {
-      setVisible(false)
-      setTimeout(() => {
-        setIdx(i => (i + 1) % PROMO_SLIDES.length)
-        setVisible(true)
-      }, 400)
-    }, 5000)
-    return () => clearInterval(t)
-  }, [])
+  const activeBlocks = scenario
+    ? scenario.blocks.filter(isBlockActive).sort((a, b) => a.sortOrder - b.sortOrder)
+    : []
+  const useScenario = activeBlocks.length > 0
+  const total = useScenario ? activeBlocks.length : PROMO_SLIDES.length
 
+  // 시나리오가 바뀌면 첫 번째 블록으로 리셋
+  useEffect(() => {
+    setIdx(0)
+    setVisible(true)
+  }, [scenario?.scenarioId])
+
+  const advance = useCallback(() => {
+    setVisible(false)
+    setTimeout(() => {
+      setIdx(i => (i + 1) % total)
+      setVisible(true)
+    }, 400)
+  }, [total])
+
+  // 블록/슬라이드 자동 전환 타이머
+  useEffect(() => {
+    const ms = useScenario ? (activeBlocks[idx % activeBlocks.length]?.displaySec ?? 5) * 1000 : 5000
+    const t = setTimeout(advance, ms)
+    return () => clearTimeout(t)
+  }, [idx, advance, useScenario])
+
+  if (useScenario) {
+    const block = activeBlocks[idx % activeBlocks.length]
+    return (
+      <section
+        className="shrink-0 mx-4 mb-3 rounded-[2rem] overflow-hidden shadow-lg"
+        style={{ background: '#000', height: '30vh' }}
+      >
+        <div
+          className="w-full h-full transition-opacity duration-[400ms]"
+          style={{ opacity: visible ? 1 : 0 }}
+        >
+          {block.fileType === 'video' ? (
+            <video
+              key={block.mediaUrl}
+              src={block.mediaUrl}
+              autoPlay
+              muted
+              loop
+              playsInline
+              className="w-full h-full object-cover"
+            />
+          ) : (
+            <img
+              key={block.mediaUrl}
+              src={block.mediaUrl}
+              alt=""
+              className="w-full h-full object-cover"
+            />
+          )}
+        </div>
+      </section>
+    )
+  }
+
+  // 기본 슬라이드 (시나리오 없을 때)
+  const slide = PROMO_SLIDES[idx % PROMO_SLIDES.length]
   return (
     <section
       className="shrink-0 mx-4 mb-3 rounded-[2rem] overflow-hidden flex items-center justify-center shadow-lg"
       style={{ background: '#ffffff', height: '30vh' }}
     >
       <div
-        className="w-full h-full flex items-center justify-center px-10 transition-opacity duration-400"
-        style={{
-          background: PROMO_SLIDES[idx].gradient,
-          opacity: visible ? 1 : 0,
-        }}
+        className="w-full h-full flex items-center justify-center px-10 transition-opacity duration-[400ms]"
+        style={{ background: slide.gradient, opacity: visible ? 1 : 0 }}
       >
         <p className="text-white font-black text-center break-keep" style={{ fontSize: 'clamp(2rem, 5.5vh, 4rem)', textShadow: '0 3px 6px rgba(0,0,0,0.3)' }}>
-          {PROMO_SLIDES[idx].text}
+          {slide.text}
         </p>
       </div>
     </section>
@@ -537,24 +628,23 @@ const NOTICES = [
   '인천광역시 강화군 버스 정보 안내 단말기',
 ].join('    ·    ')
 
-function FooterTicker() {
+function FooterTicker({ tickerText }: { tickerText: string | null }) {
+  const content = tickerText ?? NOTICES
   return (
     <footer
       className="shrink-0 flex items-center overflow-hidden"
       style={{ background: MAIN, height: '6vh' }}
     >
-      {/* Label */}
       <div
         className="shrink-0 flex items-center px-4 h-full border-r"
         style={{ borderColor: 'rgba(255,255,255,0.15)' }}
       >
         <span className="text-white/60 text-[10px] font-black tracking-[0.2em] uppercase">공지</span>
       </div>
-      {/* Scrolling text */}
       <div className="flex-1 overflow-hidden h-full flex items-center">
         <div className="marquee-ticker whitespace-nowrap text-white/80 text-sm font-medium">
-          <span>{NOTICES}&emsp;&emsp;&emsp;&emsp;</span>
-          <span>{NOTICES}&emsp;&emsp;&emsp;&emsp;</span>
+          <span>{content}&emsp;&emsp;&emsp;&emsp;</span>
+          <span>{content}&emsp;&emsp;&emsp;&emsp;</span>
         </div>
       </div>
     </footer>
@@ -569,6 +659,8 @@ export default function Home() {
   const [stopName, setStopName] = useState<string | null>(null)
   const [shortBstopId, setShortBstopId] = useState<string | null>(null)
   const [weather, setWeather] = useState<WeatherData | null>(null)
+  const [promoScenario, setPromoScenario] = useState<PromoScenario | null>(null)
+  const [tickerText, setTickerText] = useState<string | null>(null)
   const [winSize, setWinSize] = useState<{ w: number; h: number } | null>(null)
   const [showDebugOverlay, setShowDebugOverlay] = useState(false)
 
@@ -591,7 +683,7 @@ export default function Home() {
     fetch(`${BRIDGE_URL}/api/settings`)
       .then(r => r.json())
       .then(json => { if (json.showDebugOverlay) setShowDebugOverlay(true) })
-      .catch(() => {})
+      .catch(() => { })
   }, [])
 
   // 정류소 이름 + 단축 ID (브리지 기동 직후·재시작 등으로 첫 응답이 비어 있을 수 있어 몇 차례 재시도)
@@ -661,7 +753,7 @@ export default function Home() {
   useEffect(() => {
     const soonRoutes = arrivals
       .filter(isSoonArriving)
-      .map(a => a.routeNo.replace(/\(.*?\)/g, '').trim()) // 괄호 제거: "13(강화)" → "13"
+      .map(a => toSinoKorean(a.routeNo.replace(/\(.*?\)/g, '').trim())) // 한자어: "32" → "삼십이"
     if (soonRoutes.length === 0) return
 
     const routeText = soonRoutes.length === 1
@@ -670,8 +762,43 @@ export default function Home() {
     const text = `잠시 후 도착 버스는 ${routeText} 입니다.`
 
     const audio = new Audio(`${BRIDGE_URL}/api/tts/speak?${new URLSearchParams({ text })}`)
-    audio.play().catch(() => {})
+    audio.play().catch(() => { })
   }, [arrivals])
+
+  // 홍보 시나리오 SSE 구독 (onerror 시 3초 후 재연결)
+  useEffect(() => {
+    let es: EventSource | null = null
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
+
+    function connect() {
+      es = new EventSource(`${BRIDGE_URL}/api/promo/stream`)
+
+      es.addEventListener('promo', (e) => {
+        try {
+          const msg = JSON.parse(e.data)
+          if (msg.type === 'scenario') {
+            setPromoScenario(msg.data)
+            setTickerText(msg.data.tickerText ?? null)
+          } else if (msg.type === 'stop') {
+            setPromoScenario(null)
+            setTickerText(null)
+          }
+        } catch { /* noop */ }
+      })
+
+      es.onerror = () => {
+        es?.close()
+        es = null
+        retryTimer = setTimeout(connect, 3000)
+      }
+    }
+
+    connect()
+    return () => {
+      if (retryTimer) clearTimeout(retryTimer)
+      es?.close()
+    }
+  }, [])
 
   // SSE 구독 — 서버에서 20초마다 푸시
   useEffect(() => {
@@ -695,8 +822,8 @@ export default function Home() {
       <BitHeader now={now} stopName={stopName} shortBstopId={shortBstopId} weather={weather} />
       <SoonArriving arrivals={arrivals} />
       <MainList arrivals={arrivals} serviceEnded={serviceEnded} />
-      <PromoArea />
-      <FooterTicker />
+      <PromoArea scenario={promoScenario} />
+      <FooterTicker tickerText={tickerText} />
       <LogPanel />
       {/* setting.json showDebugOverlay: true 일 때만 표시 */}
       {showDebugOverlay && winSize && (
