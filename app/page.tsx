@@ -1,18 +1,82 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Sun, Cloud, CloudRain, CloudSnow, Bus, Wifi, MapPin, Calendar, Info } from 'lucide-react'
+import { Sun, Cloud, CloudRain, CloudSnow, MapPin, Calendar, Info } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { LogPanel } from '@/components/log-panel'
 
-// ─── Figma Design Tokens ──────────────────────────────────────────────────────
-const FG_BG = '#F0F2F5'
-const FG_CARD = '#FFFFFF'
-const FG_TEXT = '#212529'
-const FG_MUTED = '#6c757d'
-const FG_BORDER = 'rgba(0,0,0,0.08)'
-const FG_PRIMARY = '#1a56db'
-const FG_POINT = '#DC3545'
+// ─── Theme tokens (light / dark) ──────────────────────────────────────────────
+const LIGHT = {
+  isDark:       false,
+  bg:           '#F0F2F5',
+  card:         '#FFFFFF',
+  text:         '#212529',
+  muted:        '#6c757d',
+  border:       'rgba(0,0,0,0.08)',
+  primary:      '#1a56db',
+  point:        '#DC3545',
+  headerBg:     '#FFFFFF',
+  soonBg:       '#FFF8F8',
+  soonBorder:   '#FFD6D6',
+  soonDivider:  '#FFBBBB',
+  soonEmpty:    '#FFAAAA',
+  rowLeftBg:    '#F9FAFB',
+  footerBar:    '#1F2937',
+  footerScroll: '#374151',
+  footerText:   '#FFFFFF',
+  noNext:       '#D1D5DB',
+  weatherColor: '#D97706',
+  lastBusBg:    '#FFF7ED',
+  lastBusText:  '#C2410C',
+  lastBusBorder:'#FED7AA',
+  urgentColor:  '#D97706',
+  nightCardBg:  '#EFF6FF',
+  nightBorder:  '#BFDBFE',
+  nightLeftBg:  'rgba(191,219,254,0.35)',
+  nightBadgeBg: 'rgba(191,219,254,0.6)',
+  nightBadgeText:'#1D4ED8',
+  nightShadow:  '0 1px 4px rgba(59,130,246,0.08)',
+  cardShadow:   '0 1px 4px rgba(0,0,0,0.05)',
+}
+
+const DARK = {
+  isDark:       true,
+  bg:           '#0F1117',
+  card:         '#181D2A',
+  text:         '#E8EDF8',
+  muted:        '#8B9CC8',
+  border:       'rgba(255,255,255,0.07)',
+  primary:      '#4B7BF5',
+  point:        '#F25C54',
+  headerBg:     '#0A0E1F',
+  soonBg:       '#1A0E0E',
+  soonBorder:   '#3D1515',
+  soonDivider:  '#3D1515',
+  soonEmpty:    '#5A3030',
+  rowLeftBg:    '#141828',
+  footerBar:    '#080D18',
+  footerScroll: '#101520',
+  footerText:   '#6B7FA8',
+  noNext:       '#2D3A5A',
+  weatherColor: '#FFCA28',
+  lastBusBg:    '#2D1A0A',
+  lastBusText:  '#FB923C',
+  lastBusBorder:'#7C3B0A',
+  urgentColor:  '#F59E0B',
+  nightCardBg:  '#0F1A2E',
+  nightBorder:  '#1E3A5A',
+  nightLeftBg:  'rgba(30,58,90,0.5)',
+  nightBadgeBg: 'rgba(30,58,90,0.7)',
+  nightBadgeText:'#60A5FA',
+  nightShadow:  '0 1px 4px rgba(0,60,120,0.15)',
+  cardShadow:   '0 1px 4px rgba(0,0,0,0.3)',
+}
+
+type Theme = typeof LIGHT
+
+// 렌더 사이클마다 갱신되는 현재 테마 참조
+let _theme: Theme = LIGHT
+const T = () => _theme
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface WeatherData {
@@ -109,16 +173,6 @@ function getRouteStyle(routeType: string) {
   return { bg: '#374151', text: '#fff' }
 }
 
-function getRouteTypeName(routeType: string) {
-  switch (routeType) {
-    case '0': return '일반'
-    case '1': return '지선'
-    case '6': return '마을버스'
-    case '9': return '순환'
-    default: return '일반'
-  }
-}
-
 // ─── 날씨 아이콘 ──────────────────────────────────────────────────────────────
 function WeatherIcon({ sky, pty, size = 16 }: { sky: number | null; pty: number; size?: number }) {
   const p = { size, strokeWidth: 2, className: 'shrink-0' } as const
@@ -131,18 +185,18 @@ function WeatherIcon({ sky, pty, size = 16 }: { sky: number | null; pty: number;
 function BitHeader({ now, stopName, shortBstopId, weather }: {
   now: Date; stopName: string | null; shortBstopId: string | null; weather: WeatherData | null
 }) {
+  const th = T()
   const DAYS = ['일', '월', '화', '수', '목', '금', '토']
   const dateStr = `${now.getFullYear()}.${pad2(now.getMonth() + 1)}.${pad2(now.getDate())} (${DAYS[now.getDay()]})`
   const h = pad2(now.getHours())
   const m = pad2(now.getMinutes())
-  const s = pad2(now.getSeconds())
 
   return (
     <header
       className="shrink-0 w-full px-8 py-4 grid items-center gap-4"
       style={{
-        background: FG_CARD,
-        borderBottom: `1px solid ${FG_BORDER}`,
+        background: th.headerBg,
+        borderBottom: `1px solid ${th.border}`,
         gridTemplateColumns: '1fr 1fr 1fr',
       }}
     >
@@ -159,32 +213,19 @@ function BitHeader({ now, stopName, shortBstopId, weather }: {
             style={{ height: '3.8rem', width: 'auto' }}
           />
         </div>
-        <div>
-          {/* <p className="text-xs font-bold tracking-widest uppercase" style={{ color: FG_PRIMARY }}>
-            Bus Information Terminal
-          </p> */}
-          {/* <div
-            className="flex items-center gap-1.5 px-3 py-1 rounded-xl border mt-1"
-            style={{ background: '#F0FDF4', borderColor: '#BBF7D0', width: 'fit-content' }}
-          >
-            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-            <Wifi size={12} className="text-green-600" />
-            <span className="text-xs font-semibold text-green-700">실시간 연결됨</span>
-          </div> */}
-        </div>
       </div>
 
       {/* 가운데: 정류소명 */}
       <div className="flex flex-col items-center justify-center text-center gap-1">
         {shortBstopId && (
-          <span className="text-xs font-bold tracking-widest" style={{ color: FG_MUTED }}>
+          <span className="text-xs font-bold tracking-widest" style={{ color: th.muted }}>
             [{shortBstopId}]
           </span>
         )}
-        <h1 className="font-black leading-tight" style={{ fontSize: '2.2rem', color: FG_TEXT }}>
+        <h1 className="font-black leading-tight" style={{ fontSize: '2.2rem', color: th.text }}>
           {stopName ?? '—'}
         </h1>
-        <div className="flex items-center gap-1.5" style={{ color: FG_MUTED }}>
+        <div className="flex items-center gap-1.5" style={{ color: th.muted }}>
           <MapPin size={13} className="shrink-0" />
           <span className="text-xs font-medium">강화군 버스정보안내</span>
         </div>
@@ -192,28 +233,25 @@ function BitHeader({ now, stopName, shortBstopId, weather }: {
 
       {/* 오른쪽: 날씨 + 날짜 + 시간 */}
       <div className="flex flex-col items-end gap-1.5">
-        {/* 날씨 */}
         <div className="flex items-center gap-2">
-          <span style={{ color: '#D97706' }}>
+          <span style={{ color: th.weatherColor }}>
             <WeatherIcon sky={weather?.sky ?? null} pty={weather?.pty ?? 0} size={20} />
           </span>
-          <span className="font-bold tabular-nums" style={{ fontSize: '1.2rem', color: FG_TEXT }}>
+          <span className="font-bold tabular-nums" style={{ fontSize: '1.2rem', color: th.text }}>
             {weather?.temp != null ? `${Math.round(weather.temp)}°C` : '—'}
           </span>
-          <span className="text-xs font-medium" style={{ color: FG_MUTED }}>
+          <span className="text-xs font-medium" style={{ color: th.muted }}>
             {weather?.minTemp != null && weather?.maxTemp != null
               ? `${Math.round(weather.minTemp)}° ~ ${Math.round(weather.maxTemp)}°`
               : ''}
           </span>
         </div>
-        {/* 날짜 */}
-        <div className="flex items-center gap-1.5" style={{ color: FG_MUTED }}>
+        <div className="flex items-center gap-1.5" style={{ color: th.muted }}>
           <Calendar size={13} />
           <span className="text-sm font-medium">{dateStr}</span>
         </div>
-        {/* 시간 */}
         <div className="flex items-baseline gap-0.5">
-          <span className="font-black tabular-nums tracking-tight" style={{ fontSize: '2.6rem', lineHeight: 1, color: FG_TEXT }}>
+          <span className="font-black tabular-nums tracking-tight" style={{ fontSize: '2.6rem', lineHeight: 1, color: th.text }}>
             {h}:{m}
           </span>
         </div>
@@ -224,31 +262,29 @@ function BitHeader({ now, stopName, shortBstopId, weather }: {
 
 // ─── Soon Arriving ────────────────────────────────────────────────────────────
 function SoonArriving({ arrivals }: { arrivals: BusArrival[] }) {
+  const th = T()
   const soon = arrivals.filter(isSoonArriving)
 
   return (
     <section
       className="shrink-0 flex items-center gap-4 px-8 border-b"
-      style={{ background: '#FFF8F8', borderColor: '#FFD6D6', height: '7vh', minHeight: '3.5rem' }}
+      style={{ background: th.soonBg, borderColor: th.soonBorder, height: '7vh', minHeight: '3.5rem' }}
     >
-      {/* 라이브 인디케이터 + 라벨 */}
       <div className="flex items-center gap-2.5 shrink-0">
         <span className="relative flex h-4 w-4">
           <span
             className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-60"
-            style={{ background: FG_POINT }}
+            style={{ background: th.point }}
           />
-          <span className="relative inline-flex rounded-full h-4 w-4" style={{ background: FG_POINT }} />
+          <span className="relative inline-flex rounded-full h-4 w-4" style={{ background: th.point }} />
         </span>
-        <span className="font-black tracking-wide whitespace-nowrap" style={{ color: FG_POINT, fontSize: '1.05rem' }}>
+        <span className="font-black tracking-wide whitespace-nowrap" style={{ color: th.point, fontSize: '1.05rem' }}>
           잠시 후 도착
         </span>
       </div>
 
-      {/* 구분선 */}
-      <div className="w-px self-stretch my-2" style={{ background: '#FFBBBB' }} />
+      <div className="w-px self-stretch my-2" style={{ background: th.soonDivider }} />
 
-      {/* 노선 칩 목록 */}
       <div className="flex items-center gap-2 flex-wrap">
         {soon.length > 0 ? (
           soon.map(a => {
@@ -258,8 +294,13 @@ function SoonArriving({ arrivals }: { arrivals: BusArrival[] }) {
               <span
                 key={a.id}
                 className="inline-flex items-center px-4 py-1 rounded-full font-black border"
-                style={{
-                  background: `${style.bg}18`,
+                style={th.isDark ? {
+                  background: style.bg,
+                  borderColor: style.bg,
+                  color: '#ffffff',
+                  fontSize: '1.1rem',
+                } : {
+                  background: `${style.bg}28`,
                   borderColor: style.bg,
                   color: style.bg,
                   fontSize: '1.1rem',
@@ -270,7 +311,7 @@ function SoonArriving({ arrivals }: { arrivals: BusArrival[] }) {
             )
           })
         ) : (
-          <span className="font-medium" style={{ color: '#FFAAAA', fontSize: '0.95rem' }}>
+          <span className="font-medium" style={{ color: th.soonEmpty, fontSize: '0.95rem' }}>
             3분 이내 도착 예정 버스 없음
           </span>
         )}
@@ -281,16 +322,17 @@ function SoonArriving({ arrivals }: { arrivals: BusArrival[] }) {
 
 // ─── Column Labels ────────────────────────────────────────────────────────────
 function ColumnLabels() {
+  const th = T()
   return (
-    <div className="shrink-0 px-8 pt-5 pb-2 flex items-center" style={{ background: FG_BG }}>
+    <div className="shrink-0 px-8 pt-5 pb-2 flex items-center" style={{ background: th.bg }}>
       <div style={{ minWidth: '140px' }}>
-        <span className="text-xs font-bold uppercase tracking-widest" style={{ color: FG_MUTED }}>노선</span>
+        <span className="text-xs font-bold uppercase tracking-widest" style={{ color: th.muted }}>노선</span>
       </div>
       <div className="flex-1 flex">
-        <div className="flex-1 text-center text-xs font-bold uppercase tracking-widest" style={{ color: FG_MUTED }}>
+        <div className="flex-1 text-center text-xs font-bold uppercase tracking-widest" style={{ color: th.muted }}>
           다음 버스
         </div>
-        <div className="flex-1 text-center text-xs font-bold uppercase tracking-widest" style={{ color: FG_MUTED }}>
+        <div className="flex-1 text-center text-xs font-bold uppercase tracking-widest" style={{ color: th.muted }}>
           그 다음 버스
         </div>
       </div>
@@ -301,20 +343,21 @@ function ColumnLabels() {
 
 // ─── Arrival Card ─────────────────────────────────────────────────────────────
 function ArrivalCard({ arrival, isPrimary }: { arrival: BusArrival; isPrimary: boolean }) {
+  const th = T()
   const sec = arrival.arrivalSec
   const mins = Math.floor(sec / 60)
   const secs = sec % 60
   const isImmediate = sec < 60
   const isUrgent = sec < 600
 
-  const mainColor = isImmediate ? FG_POINT : isUrgent ? '#D97706' : FG_TEXT
-  const subColor = isImmediate ? FG_POINT : isUrgent ? '#D97706' : FG_MUTED
+  const mainColor = isImmediate ? th.point : isUrgent ? th.urgentColor : th.text
+  const subColor = isImmediate ? th.point : isUrgent ? th.urgentColor : th.muted
 
   return (
     <div className={cn('flex flex-col items-center justify-center gap-2', isPrimary ? 'min-w-[200px]' : 'min-w-[160px]')}>
       {isImmediate ? (
         <span className="font-black animate-pulse tracking-tight"
-          style={{ fontSize: isPrimary ? '2.6rem' : '1.7rem', color: FG_POINT, lineHeight: 1 }}
+          style={{ fontSize: isPrimary ? '2.6rem' : '1.7rem', color: th.point, lineHeight: 1 }}
         >
           곧 도착
         </span>
@@ -335,25 +378,23 @@ function ArrivalCard({ arrival, isPrimary }: { arrival: BusArrival; isPrimary: b
         </div>
       )}
 
-      {/* 상태 뱃지 — 막차만 표시 */}
       {arrival.isLastBus && (
         <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold"
-          style={{ background: '#FFF7ED', color: '#C2410C', border: '1px solid #FED7AA' }}
+          style={{ background: th.lastBusBg, color: th.lastBusText, border: `1px solid ${th.lastBusBorder}` }}
         >막차</span>
       )}
 
-      {/* 현재 위치 */}
       <div className="flex items-center gap-2 flex-wrap justify-center">
         {arrival.restStopCount > 0 && !isImmediate && (
           <span
             className="font-bold tabular-nums"
-            style={{ fontSize: isPrimary ? '1rem' : '0.8rem', color: FG_MUTED }}
+            style={{ fontSize: isPrimary ? '1rem' : '0.8rem', color: th.muted }}
           >
             {arrival.restStopCount}정류소 전
           </span>
         )}
         {arrival.latestStopName && (
-          <div className="flex items-center gap-1 text-xs" style={{ color: '#9CA3AF' }}>
+          <div className="flex items-center gap-1 text-xs" style={{ color: th.muted }}>
             <MapPin size={10} />
             <span className="truncate max-w-[120px]">{arrival.latestStopName}</span>
           </div>
@@ -365,6 +406,7 @@ function ArrivalCard({ arrival, isPrimary }: { arrival: BusArrival; isPrimary: b
 
 // ─── Bus Row ──────────────────────────────────────────────────────────────────
 function BusRow({ group }: { group: GroupedRoute }) {
+  const th = T()
   const { routeNo, routeType, arrivals } = group
   const displayNo = routeNo.replace(/\s*\(.*?\)\s*/g, '')
   const style = getRouteStyle(routeType)
@@ -374,11 +416,9 @@ function BusRow({ group }: { group: GroupedRoute }) {
     <div
       className="flex items-center rounded-2xl overflow-hidden border transition-all duration-200"
       style={{
-        background: isNight ? '#EFF6FF' : FG_CARD,
-        borderColor: isNight ? '#BFDBFE' : FG_BORDER,
-        boxShadow: isNight
-          ? '0 1px 4px rgba(59,130,246,0.08)'
-          : '0 1px 4px rgba(0,0,0,0.05)',
+        background: isNight ? th.nightCardBg : th.card,
+        borderColor: isNight ? th.nightBorder : th.border,
+        boxShadow: isNight ? th.nightShadow : th.cardShadow,
       }}
     >
       {/* 왼쪽: 노선번호 */}
@@ -386,8 +426,8 @@ function BusRow({ group }: { group: GroupedRoute }) {
         className="flex flex-col items-center justify-center gap-2 py-5 px-5 self-stretch border-r"
         style={{
           minWidth: '140px',
-          background: isNight ? 'rgba(191,219,254,0.35)' : '#F9FAFB',
-          borderColor: isNight ? '#BFDBFE' : FG_BORDER,
+          background: isNight ? th.nightLeftBg : th.rowLeftBg,
+          borderColor: isNight ? th.nightBorder : th.border,
         }}
       >
         <div className="flex items-center justify-center rounded-xl px-3 py-1.5" style={{ background: style.bg }}>
@@ -399,23 +439,23 @@ function BusRow({ group }: { group: GroupedRoute }) {
         </div>
         {isNight && (
           <span className="text-xs font-bold px-2 py-0.5 rounded-full"
-            style={{ background: 'rgba(191,219,254,0.6)', color: '#1D4ED8' }}
+            style={{ background: th.nightBadgeBg, color: th.nightBadgeText }}
           >심야</span>
         )}
       </div>
 
       {/* 도착 정보 2칸 */}
       <div className="flex items-center flex-1">
-        <div className="flex-1 flex items-center justify-center py-4 px-4 border-r" style={{ borderColor: FG_BORDER }}>
+        <div className="flex-1 flex items-center justify-center py-4 px-4 border-r" style={{ borderColor: th.border }}>
           {arrivals[0]
             ? <ArrivalCard arrival={arrivals[0]} isPrimary={true} />
-            : <span className="text-sm" style={{ color: FG_MUTED }}>정보 없음</span>
+            : <span className="text-sm" style={{ color: th.muted }}>정보 없음</span>
           }
         </div>
         <div className="flex-1 flex items-center justify-center py-4 px-4 opacity-80">
           {arrivals[1]
             ? <ArrivalCard arrival={arrivals[1]} isPrimary={false} />
-            : <span className="text-sm" style={{ color: '#D1D5DB' }}>다음 버스 정보 없음</span>
+            : <span className="text-sm" style={{ color: th.noNext }}>다음 버스 정보 없음</span>
           }
         </div>
       </div>
@@ -426,6 +466,7 @@ function BusRow({ group }: { group: GroupedRoute }) {
 
 // ─── Main List ────────────────────────────────────────────────────────────────
 function MainList({ arrivals, serviceEnded }: { arrivals: BusArrival[]; serviceEnded: boolean }) {
+  const th = T()
   const [page, setPage] = useState(0)
   const itemsPerPage = 4
   const groups = groupByRoute(arrivals)
@@ -440,13 +481,13 @@ function MainList({ arrivals, serviceEnded }: { arrivals: BusArrival[]; serviceE
 
   if (serviceEnded) {
     return (
-      <section className="flex-1 flex flex-col items-center justify-center gap-4 py-10" style={{ background: FG_BG }}>
+      <section className="flex-1 flex flex-col items-center justify-center gap-4 py-10" style={{ background: th.bg }}>
         <div className="rounded-3xl flex flex-col items-center justify-center gap-3 px-12 py-10 border shadow-sm"
-          style={{ background: FG_CARD, borderColor: FG_BORDER }}
+          style={{ background: th.card, borderColor: th.border }}
         >
           <span style={{ fontSize: '3rem', lineHeight: 1 }}>🌙</span>
-          <span className="font-black tracking-tight" style={{ fontSize: '2.25rem', color: FG_TEXT }}>운행 종료</span>
-          <span className="font-medium text-base" style={{ color: FG_MUTED }}>금일 버스 운행이 모두 종료되었습니다</span>
+          <span className="font-black tracking-tight" style={{ fontSize: '2.25rem', color: th.text }}>운행 종료</span>
+          <span className="font-medium text-base" style={{ color: th.muted }}>금일 버스 운행이 모두 종료되었습니다</span>
         </div>
       </section>
     )
@@ -456,12 +497,12 @@ function MainList({ arrivals, serviceEnded }: { arrivals: BusArrival[]; serviceE
   const visible = groups.slice(page * itemsPerPage, (page + 1) * itemsPerPage)
 
   return (
-    <section className="flex-1 px-8 py-3 flex flex-col gap-3 relative overflow-hidden" style={{ background: FG_BG }}>
+    <section className="flex-1 px-8 py-3 flex flex-col gap-3 relative overflow-hidden" style={{ background: th.bg }}>
       {totalPages > 1 && (
         <div className="absolute top-2 right-10 flex gap-1.5 z-10">
           {Array.from({ length: totalPages }).map((_, i) => (
             <div key={i} className="w-2 h-2 rounded-full transition-colors"
-              style={{ background: i === page ? FG_PRIMARY : '#D1D5DB' }}
+              style={{ background: i === page ? th.primary : th.noNext }}
             />
           ))}
         </div>
@@ -481,6 +522,7 @@ const PROMO_SLIDES = [
 ]
 
 function PromoArea({ scenario }: { scenario: PromoScenario | null }) {
+  const th = T()
   const [idx, setIdx] = useState(0)
   const [visible, setVisible] = useState(true)
 
@@ -507,7 +549,7 @@ function PromoArea({ scenario }: { scenario: PromoScenario | null }) {
     const block = activeBlocks[idx % activeBlocks.length]
     return (
       <section className="shrink-0 mx-8 mb-3 rounded-2xl overflow-hidden border shadow-sm"
-        style={{ background: '#000', height: '28vh', borderColor: FG_BORDER }}
+        style={{ background: '#000', height: '28vh', borderColor: th.border }}
       >
         <div className="w-full h-full transition-opacity duration-[400ms]" style={{ opacity: visible ? 1 : 0 }}>
           {block.fileType === 'video'
@@ -522,7 +564,7 @@ function PromoArea({ scenario }: { scenario: PromoScenario | null }) {
   const slide = PROMO_SLIDES[idx % PROMO_SLIDES.length]
   return (
     <section className="shrink-0 mx-8 mb-3 rounded-2xl overflow-hidden flex items-center justify-center border shadow-sm"
-      style={{ borderColor: FG_BORDER, height: '28vh' }}
+      style={{ borderColor: th.border, height: '28vh' }}
     >
       <div className="w-full h-full flex items-center justify-center px-10 transition-opacity duration-[400ms]"
         style={{ background: slide.gradient, opacity: visible ? 1 : 0 }}
@@ -547,19 +589,20 @@ const NOTICES = [
 ]
 
 function FooterTicker({ tickerText }: { tickerText: string | null }) {
+  const th = T()
   const messages = tickerText ? [tickerText] : NOTICES
   const fullText = messages.join('     ·     ')
 
   return (
     <footer className="shrink-0 mx-8 mb-4 flex items-stretch rounded-2xl overflow-hidden border shadow-sm"
-      style={{ borderColor: '#D1D5DB', minHeight: '6vh' }}
+      style={{ borderColor: th.border, minHeight: '6vh' }}
     >
-      <div className="flex items-center gap-2 px-5 shrink-0" style={{ background: '#1F2937', minWidth: '130px' }}>
+      <div className="flex items-center gap-2 px-5 shrink-0" style={{ background: th.footerBar, minWidth: '130px' }}>
         <Info size={16} className="text-yellow-300 shrink-0" />
-        <span className="text-sm font-bold text-white whitespace-nowrap">운행 정보</span>
+        <span className="text-sm font-bold whitespace-nowrap" style={{ color: th.footerText }}>운행 정보</span>
       </div>
-      <div className="flex-1 overflow-hidden flex items-center" style={{ background: '#374151' }}>
-        <div className="marquee-ticker whitespace-nowrap text-white font-medium" style={{ fontSize: '0.95rem' }}>
+      <div className="flex-1 overflow-hidden flex items-center" style={{ background: th.footerScroll }}>
+        <div className="marquee-ticker whitespace-nowrap font-medium" style={{ fontSize: '0.95rem', color: th.footerText }}>
           <span>{fullText}&emsp;&emsp;&emsp;&emsp;</span>
           <span>{fullText}&emsp;&emsp;&emsp;&emsp;</span>
         </div>
@@ -570,6 +613,7 @@ function FooterTicker({ tickerText }: { tickerText: string | null }) {
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 export default function Home() {
+  const [isDark, setIsDark] = useState(false)
   const [now, setNow] = useState(() => new Date())
   const [arrivals, setArrivals] = useState<BusArrival[]>([])
   const [serviceEnded, setServiceEnded] = useState(false)
@@ -581,6 +625,9 @@ export default function Home() {
   const [winSize, setWinSize] = useState<{ w: number; h: number } | null>(null)
   const [showDebugOverlay, setShowDebugOverlay] = useState(false)
 
+  // 테마 동기화 — 렌더 전에 전역 참조 갱신
+  _theme = isDark ? DARK : LIGHT
+
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000)
     return () => clearInterval(t)
@@ -591,6 +638,15 @@ export default function Home() {
     update()
     window.addEventListener('resize', update)
     return () => window.removeEventListener('resize', update)
+  }, [])
+
+  // D 키로 다크모드 토글
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'd' || e.key === 'D') setIsDark(v => !v)
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
   }, [])
 
   useEffect(() => {
@@ -694,8 +750,10 @@ export default function Home() {
     return () => es.close()
   }, [])
 
+  const th = T()
+
   return (
-    <div className="flex-1 flex flex-col overflow-hidden" style={{ background: FG_BG }}>
+    <div className="flex-1 flex flex-col overflow-hidden" style={{ background: th.bg }}>
       <BitHeader now={now} stopName={stopName} shortBstopId={shortBstopId} weather={weather} />
       <SoonArriving arrivals={arrivals} />
       <ColumnLabels />
@@ -708,6 +766,13 @@ export default function Home() {
           {winSize.w} × {winSize.h} px
         </div>
       )}
+      {/* 다크모드 상태 표시 (개발용) */}
+      <div
+        className="fixed bottom-2 right-2 z-[9999] text-xs font-mono px-3 py-1.5 rounded-lg pointer-events-none"
+        style={{ background: th.card, color: th.muted, border: `1px solid ${th.border}` }}
+      >
+        {isDark ? '🌙 Dark' : '☀️ Light'} · D키 전환
+      </div>
     </div>
   )
 }
