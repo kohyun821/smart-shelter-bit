@@ -612,6 +612,40 @@ app.get('/api/bus/via-routes', (_req, res) => {
 
 // ── 버스 실시간 도착 정보 ─────────────────────────────────────────────────────
 
+// ── 테스트 모드 (스냅샷 데이터 사용) ─────────────────────────────────────────
+
+let testMode = false
+
+/**
+ * GET /api/bus/test-mode/on
+ * 테스트 모드 활성화 — SSE 구독자에게 스냅샷 데이터 즉시 push
+ */
+app.get('/api/bus/test-mode/on', async (_req, res) => {
+  testMode = true
+  console.log('[Bridge][TestMode] 테스트 모드 ON — 스냅샷 데이터 사용')
+  await pollAndBroadcast()
+  res.json({ ok: true, testMode })
+})
+
+/**
+ * GET /api/bus/test-mode/off
+ * 테스트 모드 비활성화 — 실시간 API로 복귀
+ */
+app.get('/api/bus/test-mode/off', async (_req, res) => {
+  testMode = false
+  console.log('[Bridge][TestMode] 테스트 모드 OFF — 실시간 API 사용')
+  await pollAndBroadcast()
+  res.json({ ok: true, testMode })
+})
+
+/**
+ * GET /api/bus/test-mode
+ * 현재 테스트 모드 상태 반환
+ */
+app.get('/api/bus/test-mode', (_req, res) => {
+  res.json({ testMode })
+})
+
 // ── 공통 데이터 빌더 ──────────────────────────────────────────────────────────
 
 /**
@@ -647,6 +681,17 @@ function isRouteServiceEnded(lbusDephms) {
  * @returns {Promise<{arrivals: Array, serviceEnded: boolean}>}
  */
 async function buildArrivalData() {
+  // 테스트 모드: 스냅샷 파일에서 데이터 반환
+  if (testMode) {
+    try {
+      const raw = require('fs').readFileSync(SNAPSHOT_PATH, 'utf-8')
+      const snapshot = JSON.parse(raw)
+      return { arrivals: snapshot.arrivals || [], serviceEnded: snapshot.serviceEnded ?? false }
+    } catch (e) {
+      console.warn('[Bridge][TestMode] 스냅샷 읽기 실패:', e.message)
+    }
+  }
+
   const bstopId  = busApi.loadBusStopId()
   const items    = await busApi.fetchAllRouteBusArrivalList(bstopId)
   const cache    = busApi.getViaRouteCache() || []
