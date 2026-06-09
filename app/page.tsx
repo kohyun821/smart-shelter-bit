@@ -1,28 +1,26 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Sun, Cloud, CloudRain, CloudSnow } from 'lucide-react'
-import { Badge } from '@/components/ui/badge'
+import { Sun, Cloud, CloudRain, CloudSnow, Bus, Wifi, MapPin, Calendar, Info } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { LogPanel } from '@/components/log-panel'
 
-// ─── Color palette ────────────────────────────────────────────────────────────
-const MAIN = '#1A237E' // deep navy
-const SUB = '#E8EAF6' // soft sky blue
-const POINT = '#ED1C24' // red
-/** 헤더 전용: 평면 네이비보다 깊이감 있게 */
-const HEADER_GRADIENT =
-  'linear-gradient(168deg, #283593 0%, #1A237E 42%, #0d1447 100%)'
-const HEADER_MUTED = 'rgba(232, 234, 246, 0.62)'
-const HEADER_WEATHER = '#FFE082' // 앰버 — 쨍한 노랑보다 네이비와 잘 어울림
+// ─── Figma Design Tokens ──────────────────────────────────────────────────────
+const FG_BG = '#F0F2F5'
+const FG_CARD = '#FFFFFF'
+const FG_TEXT = '#212529'
+const FG_MUTED = '#6c757d'
+const FG_BORDER = 'rgba(0,0,0,0.08)'
+const FG_PRIMARY = '#1a56db'
+const FG_POINT = '#DC3545'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface WeatherData {
   temp: number | null
   minTemp: number | null
   maxTemp: number | null
-  sky: number | null  // 1=맑음, 3=구름많음, 4=흐림
-  pty: number         // 0=없음, 1=비, 2=비/눈, 3=눈, 4=소나기
+  sky: number | null
+  pty: number
 }
 
 interface PromoBlock {
@@ -44,24 +42,27 @@ interface PromoScenario {
 interface BusArrival {
   id: string
   routeNo: string
-  routeType: string       // ROUTETPCD
-  arrivalSec: number      // ARRIVALESTIMATETIME (seconds)
-  restStopCount: number   // REST_STOP_COUNT
-  isLowFloor: boolean     // LOW_TP_CD === 'Y'
-  isLastBus: boolean      // LASTBUSYN === 'Y'
-  currentStop: number     // LATEST_STOPSEQ (1-based)
-  totalStops: number      // total stops on route
+  routeType: string
+  arrivalSec: number
+  restStopCount: number
+  isLowFloor: boolean
+  isLastBus: boolean
+  currentStop: number
+  totalStops: number
   latestStopName?: string
+}
+
+interface GroupedRoute {
+  routeNo: string
+  routeType: string
+  arrivals: BusArrival[]
 }
 
 const BRIDGE_URL = 'http://localhost:4000'
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
-function pad2(n: number) {
-  return String(n).padStart(2, '0')
-}
+function pad2(n: number) { return String(n).padStart(2, '0') }
 
-/** 아라비아 숫자 문자열을 한자어 읽기로 변환 (32 → "삼십이", 48 → "사십팔") */
 function toSinoKorean(numStr: string): string {
   const n = parseInt(numStr, 10)
   if (isNaN(n) || n <= 0) return numStr
@@ -75,10 +76,13 @@ function toSinoKorean(numStr: string): string {
   if (t === 1) r += '십'
   else if (t > 1) r += d[t] + '십'
   if (o > 0) r += d[o]
-  return r + numStr.replace(/^\d+/, '') // 숫자 뒤 문자 (예: "A") 보존
+  return r + numStr.replace(/^\d+/, '')
 }
 
-/** 오늘 날짜가 broadcastStart ~ broadcastEnd 범위 내인지 확인 (로컬 시간 기준) */
+function isSoonArriving(a: BusArrival) {
+  return a.arrivalSec <= 239 || a.restStopCount <= 2
+}
+
 function isBlockActive(block: PromoBlock): boolean {
   const d = new Date()
   const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -87,192 +91,186 @@ function isBlockActive(block: PromoBlock): boolean {
   return true
 }
 
+function groupByRoute(arrivals: BusArrival[]): GroupedRoute[] {
+  const map = new Map<string, GroupedRoute>()
+  for (const a of arrivals) {
+    if (!map.has(a.routeNo)) map.set(a.routeNo, { routeNo: a.routeNo, routeType: a.routeType, arrivals: [] })
+    const g = map.get(a.routeNo)!
+    if (g.arrivals.length < 2) g.arrivals.push(a)
+  }
+  return Array.from(map.values())
+}
+
+function getRouteStyle(routeType: string) {
+  if (routeType === '0') return { bg: '#1B6840', text: '#fff' }
+  if (routeType === '1') return { bg: '#1E3A8A', text: '#fff' }
+  if (routeType === '6') return { bg: '#92400E', text: '#fff' }
+  if (routeType === '9') return { bg: '#166534', text: '#fff' }
+  return { bg: '#374151', text: '#fff' }
+}
+
+function getRouteTypeName(routeType: string) {
+  switch (routeType) {
+    case '0': return '일반'
+    case '1': return '지선'
+    case '6': return '마을버스'
+    case '9': return '순환'
+    default: return '일반'
+  }
+}
+
 // ─── 날씨 아이콘 ──────────────────────────────────────────────────────────────
-function WeatherIcon({ sky, pty }: { sky: number | null; pty: number }) {
-  const iconProps = {
-    className: 'shrink-0 opacity-95' as const,
-    style: { width: 'clamp(1.1rem, 2.6vh, 1.75rem)', height: 'clamp(1.1rem, 2.6vh, 1.75rem)' },
-    strokeWidth: 2.25,
-  }
-  if (pty > 0) {
-    if (pty === 3) return <CloudSnow {...iconProps} />
-    return <CloudRain {...iconProps} />
-  }
-  if (sky === 3 || sky === 4) return <Cloud {...iconProps} />
-  return <Sun {...iconProps} />
+function WeatherIcon({ sky, pty, size = 16 }: { sky: number | null; pty: number; size?: number }) {
+  const p = { size, strokeWidth: 2, className: 'shrink-0' } as const
+  if (pty > 0) return pty === 3 ? <CloudSnow {...p} /> : <CloudRain {...p} />
+  if (sky === 3 || sky === 4) return <Cloud {...p} />
+  return <Sun {...p} />
 }
 
 // ─── Header ───────────────────────────────────────────────────────────────────
-function BitHeader({ now, stopName, shortBstopId, weather }: { now: Date; stopName: string | null; shortBstopId: string | null; weather: WeatherData | null }) {
-  const days = ['일', '월', '화', '수', '목', '금', '토']
-  const dateStr = `${now.getFullYear()}.${pad2(now.getMonth() + 1)}.${pad2(now.getDate())} (${days[now.getDay()]})`
-  const timeStr = `${pad2(now.getHours())}:${pad2(now.getMinutes())}`
+function BitHeader({ now, stopName, shortBstopId, weather }: {
+  now: Date; stopName: string | null; shortBstopId: string | null; weather: WeatherData | null
+}) {
+  const DAYS = ['일', '월', '화', '수', '목', '금', '토']
+  const dateStr = `${now.getFullYear()}.${pad2(now.getMonth() + 1)}.${pad2(now.getDate())} (${DAYS[now.getDay()]})`
+  const h = pad2(now.getHours())
+  const m = pad2(now.getMinutes())
+  const s = pad2(now.getSeconds())
 
   return (
     <header
-      className="shrink-0 grid grid-cols-3 items-stretch gap-3 px-6 sm:px-8 w-full min-w-0 shadow-[inset_0_-1px_0_rgba(255,255,255,0.08)]"
-      style={{ background: HEADER_GRADIENT, height: '15vh', minHeight: '5.5rem' }}
+      className="shrink-0 w-full px-8 py-4 grid items-center gap-4"
+      style={{
+        background: FG_CARD,
+        borderBottom: `1px solid ${FG_BORDER}`,
+        gridTemplateColumns: '1fr 1fr 1fr',
+      }}
     >
-      {/* 1/3 — symbol (헤더 세로의 대부분을 쓰도록) */}
-      <div className="flex min-w-0 min-h-0 items-center justify-center py-[1vh]">
+      {/* 왼쪽: 강화군 로고 */}
+      <div className="flex items-center gap-3">
         <div
-          className="shrink-0 rounded-2xl p-[0.35vh] shadow-lg max-h-full flex items-center justify-center"
-          style={{
-            background: 'linear-gradient(145deg, #ffffff 0%, #f0f2fa 100%)',
-            boxShadow: '0 12px 40px rgba(0,0,0,0.28), 0 0 0 1px rgba(255,255,255,0.35)',
-          }}
+          className="shrink-0 rounded-2xl p-1 shadow-md flex items-center justify-center"
+          style={{ background: '#fff', border: '1px solid #E5E7EB' }}
         >
           <img
             src="/symbol.jpg"
             alt="강화군"
-            className="shrink-0 rounded-xl object-contain bg-white max-h-full w-auto"
-            style={{
-              height: 'min(12.5vh, 88%)',
-              maxWidth: 'min(30vw, 12rem)',
-            }}
+            className="rounded-xl object-contain"
+            style={{ height: '3.8rem', width: 'auto' }}
           />
         </div>
+        <div>
+          {/* <p className="text-xs font-bold tracking-widest uppercase" style={{ color: FG_PRIMARY }}>
+            Bus Information Terminal
+          </p> */}
+          {/* <div
+            className="flex items-center gap-1.5 px-3 py-1 rounded-xl border mt-1"
+            style={{ background: '#F0FDF4', borderColor: '#BBF7D0', width: 'fit-content' }}
+          >
+            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+            <Wifi size={12} className="text-green-600" />
+            <span className="text-xs font-semibold text-green-700">실시간 연결됨</span>
+          </div> */}
+        </div>
       </div>
 
-      {/* 1/3 — station name */}
-      <div className="flex min-w-0 min-h-0 flex-col items-center justify-center text-center px-2 border-x border-white/[0.08] gap-[0.6vh] py-[0.5vh]">
-        <p
-          className="font-bold tracking-[0.2em] uppercase leading-none"
-          style={{
-            color: HEADER_MUTED,
-            fontSize: 'clamp(0.7rem, 1.85vh, 1.05rem)',
-          }}
-        >
-          [{shortBstopId ?? '12345'}]
-        </p>
-        <h1
-          className="font-black tracking-tight line-clamp-2 leading-[1.08] drop-shadow-sm max-w-full"
-          style={{
-            color: SUB,
-            fontSize: 'clamp(1.85rem, 5vh, 4rem)',
-            textShadow: '0 1px 2px rgba(0,0,0,0.2)',
-          }}
-        >
+      {/* 가운데: 정류소명 */}
+      <div className="flex flex-col items-center justify-center text-center gap-1">
+        {shortBstopId && (
+          <span className="text-xs font-bold tracking-widest" style={{ color: FG_MUTED }}>
+            [{shortBstopId}]
+          </span>
+        )}
+        <h1 className="font-black leading-tight" style={{ fontSize: '2.2rem', color: FG_TEXT }}>
           {stopName ?? '—'}
         </h1>
+        <div className="flex items-center gap-1.5" style={{ color: FG_MUTED }}>
+          <MapPin size={13} className="shrink-0" />
+          <span className="text-xs font-medium">강화군 버스정보안내</span>
+        </div>
       </div>
 
-      {/* 1/3 — weather + date / time (세로 균등 배치로 띠 높이 활용) */}
-      <div className="flex min-w-0 min-h-0 flex-col items-center justify-evenly text-center py-[0.75vh]">
-        {/* 날씨 아이콘 + 현재 기온 + 최저~최고 기온 */}
-        <div className="flex flex-col items-center gap-[0.25vh] leading-none">
-          <div
-            className="flex items-center justify-center gap-[0.5vh] font-bold tabular-nums"
-            style={{ color: HEADER_WEATHER, fontSize: 'clamp(0.9rem, 2.3vh, 1.5rem)' }}
-          >
-            <WeatherIcon sky={weather?.sky ?? null} pty={weather?.pty ?? 0} />
-            <span>{weather?.temp != null ? `${Math.round(weather.temp)}°C` : '—'}</span>
-          </div>
-          <div
-            className="tabular-nums font-medium"
-            style={{ color: HEADER_MUTED, fontSize: 'clamp(0.6rem, 1.5vh, 0.9rem)' }}
-          >
+      {/* 오른쪽: 날씨 + 날짜 + 시간 */}
+      <div className="flex flex-col items-end gap-1.5">
+        {/* 날씨 */}
+        <div className="flex items-center gap-2">
+          <span style={{ color: '#D97706' }}>
+            <WeatherIcon sky={weather?.sky ?? null} pty={weather?.pty ?? 0} size={20} />
+          </span>
+          <span className="font-bold tabular-nums" style={{ fontSize: '1.2rem', color: FG_TEXT }}>
+            {weather?.temp != null ? `${Math.round(weather.temp)}°C` : '—'}
+          </span>
+          <span className="text-xs font-medium" style={{ color: FG_MUTED }}>
             {weather?.minTemp != null && weather?.maxTemp != null
               ? `${Math.round(weather.minTemp)}° ~ ${Math.round(weather.maxTemp)}°`
-              : '최저 ~ 최고'}
-          </div>
+              : ''}
+          </span>
         </div>
-        <p
-          className="font-semibold leading-tight px-1"
-          style={{
-            color: HEADER_MUTED,
-            fontSize: 'clamp(0.75rem, 2vh, 1.2rem)',
-          }}
-        >
-          {dateStr}
-        </p>
-        <div
-          className="rounded-xl px-[1.2vw] py-[0.45vh]"
-          style={{
-            background: 'rgba(0,0,0,0.22)',
-            boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.06)',
-            border: '1px solid rgba(255,255,255,0.1)',
-          }}
-        >
-          <p
-            className="font-mono font-bold tabular-nums tracking-[0.06em] leading-none"
-            style={{
-              color: SUB,
-              fontSize: 'clamp(1.45rem, 3.8vh, 2.85rem)',
-            }}
-          >
-            {timeStr}
-          </p>
+        {/* 날짜 */}
+        <div className="flex items-center gap-1.5" style={{ color: FG_MUTED }}>
+          <Calendar size={13} />
+          <span className="text-sm font-medium">{dateStr}</span>
+        </div>
+        {/* 시간 */}
+        <div className="flex items-baseline gap-0.5">
+          <span className="font-black tabular-nums tracking-tight" style={{ fontSize: '2.6rem', lineHeight: 1, color: FG_TEXT }}>
+            {h}:{m}
+          </span>
         </div>
       </div>
     </header>
   )
 }
 
-function getRouteColor(routeType: string) {
-  if (routeType === '0') return '#13908f'
-  if (routeType === '1') return '#011ff6'
-  if (routeType === '6') return '#b6982a'
-  if (routeType === '9') return '#3d9c3e'
-  return MAIN
-}
-
-function getRouteTypeName(routeType: string) {
-  switch (routeType) {
-    case '0': return '일반' // 정보 없음을 일반으로 취급
-    case '1': return '지선'
-    case '2': return '간선'
-    case '3': return '좌석'
-    case '4': return '광역'
-    case '5': return '리무진'
-    case '6': return '마을버스'
-    case '7': return '순환'
-    case '8': return '급행간선'
-    case '9': return '지선(순환)'
-    default: return '일반'
-  }
-}
-
 // ─── Soon Arriving ────────────────────────────────────────────────────────────
-/** 3분 59초 이하이거나 2정거장 이내 */
-function isSoonArriving(a: BusArrival) {
-  return a.arrivalSec <= 239 || a.restStopCount <= 2
-}
-
 function SoonArriving({ arrivals }: { arrivals: BusArrival[] }) {
   const soon = arrivals.filter(isSoonArriving)
 
   return (
     <section
-      className="shrink-0 flex items-center gap-5 px-6"
-      style={{ background: SUB, height: '6.5vh' }}
+      className="shrink-0 flex items-center gap-4 px-8 border-b"
+      style={{ background: '#FFF8F8', borderColor: '#FFD6D6', height: '7vh', minHeight: '3.5rem' }}
     >
-      <div className="flex items-center gap-3 shrink-0">
-        <span className="relative flex h-5 w-5">
+      {/* 라이브 인디케이터 + 라벨 */}
+      <div className="flex items-center gap-2.5 shrink-0">
+        <span className="relative flex h-4 w-4">
           <span
-            className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75"
-            style={{ background: POINT }}
+            className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-60"
+            style={{ background: FG_POINT }}
           />
-          <span className="relative inline-flex rounded-full h-5 w-5" style={{ background: POINT }} />
+          <span className="relative inline-flex rounded-full h-4 w-4" style={{ background: FG_POINT }} />
         </span>
-        <span className="text-2xl font-black tracking-[0.1em] uppercase whitespace-nowrap" style={{ color: MAIN }}>
+        <span className="font-black tracking-wide whitespace-nowrap" style={{ color: FG_POINT, fontSize: '1.05rem' }}>
           잠시 후 도착
         </span>
       </div>
-      <div className="w-1 h-8 rounded-full" style={{ background: `${MAIN}30` }} />
-      <div className="flex flex-wrap gap-3">
+
+      {/* 구분선 */}
+      <div className="w-px self-stretch my-2" style={{ background: '#FFBBBB' }} />
+
+      {/* 노선 칩 목록 */}
+      <div className="flex items-center gap-2 flex-wrap">
         {soon.length > 0 ? (
-          soon.map(a => (
-            <Badge
-              key={a.id}
-              className="rounded-full text-white text-2xl font-black px-6 py-2 border-0 shadow-sm"
-              style={{ background: getRouteColor(a.routeType) }}
-            >
-              {a.routeNo.replace(/\s*\(.*?\)\s*/g, '')}
-            </Badge>
-          ))
+          soon.map(a => {
+            const displayNo = a.routeNo.replace(/\s*\(.*?\)\s*/g, '')
+            const style = getRouteStyle(a.routeType)
+            return (
+              <span
+                key={a.id}
+                className="inline-flex items-center px-4 py-1 rounded-full font-black border"
+                style={{
+                  background: `${style.bg}18`,
+                  borderColor: style.bg,
+                  color: style.bg,
+                  fontSize: '1.1rem',
+                }}
+              >
+                {displayNo}
+              </span>
+            )
+          })
         ) : (
-          <span className="text-2xl font-bold" style={{ color: `${MAIN}60` }}>
+          <span className="font-medium" style={{ color: '#FFAAAA', fontSize: '0.95rem' }}>
             3분 이내 도착 예정 버스 없음
           </span>
         )}
@@ -281,258 +279,205 @@ function SoonArriving({ arrivals }: { arrivals: BusArrival[] }) {
   )
 }
 
-// ─── Location progress bar: ●─●─[🚌]─○─○ ─────────────────────────────────
-function LocationBar({ currentStop, totalStops, restStopCount }: { currentStop: number; totalStops: number; restStopCount: number }) {
-  const safeRestStopCount = Math.max(0, restStopCount)
-  const isCompressed = safeRestStopCount > 6
-  const nodeCount = 6
-
-  // Right-to-Left progression. Leftmost node (0) is "1정거장 전"
-  const busPos = isCompressed ? 5 : Math.max(0, safeRestStopCount - 1)
-
+// ─── Column Labels ────────────────────────────────────────────────────────────
+function ColumnLabels() {
   return (
-    <div className="flex items-center w-full">
-      {Array.from({ length: nodeCount }, (_, i) => {
-        // If compressed, ellipsis is right after node 0
-        const isLongSeg = isCompressed && i === 1
-        const isFirst = i === 0
-
-        // Node values: 1, 2, 3... moving right. If compressed, node 1..5 map to n-4..n
-        const nodeValue = isCompressed
-          ? (i === 0 ? 1 : safeRestStopCount - (5 - i))
-          : i + 1
-
-        return (
-          <div
-            key={i}
-            className={cn(
-              'flex items-center relative',
-              isFirst ? 'flex-none w-8' : isLongSeg ? 'flex-1' : (isCompressed ? 'flex-none w-[4.5rem]' : 'flex-1'),
-            )}
-          >
-            {/* Connector line before each node (except first) */}
-            {i > 0 && (
-              isLongSeg ? (
-                <div
-                  className="flex-1 h-2"
-                  style={{
-                    backgroundImage: 'radial-gradient(circle, #D1D5DB 3px, transparent 3px)',
-                    backgroundSize: '12px 8px',
-                    backgroundPosition: 'center',
-                    backgroundRepeat: 'repeat-x'
-                  }}
-                />
-              ) : (
-                <div className="flex-1 h-2" style={{ background: '#D1D5DB' }} />
-              )
-            )}
-
-            {/* Node */}
-            <div className="w-8 shrink-0 flex justify-center items-center h-8 relative">
-              {i === busPos ? (
-                <span className="text-6xl leading-none select-none drop-shadow-sm absolute z-10">
-                  🚌
-                </span>
-              ) : (
-                <div
-                  className="w-8 h-8 rounded-full border-[4px] bg-white shadow-sm z-0 flex items-center justify-center"
-                  style={{ borderColor: '#D1D5DB' }}
-                >
-                  <span className="text-[13px] font-black tracking-tighter" style={{ color: '#4B5563', lineHeight: '1' }}>
-                    {nodeValue}
-                  </span>
-                </div>
-              )}
-            </div>
-          </div>
-        )
-      })}
+    <div className="shrink-0 px-8 pt-5 pb-2 flex items-center" style={{ background: FG_BG }}>
+      <div style={{ minWidth: '140px' }}>
+        <span className="text-xs font-bold uppercase tracking-widest" style={{ color: FG_MUTED }}>노선</span>
+      </div>
+      <div className="flex-1 flex">
+        <div className="flex-1 text-center text-xs font-bold uppercase tracking-widest" style={{ color: FG_MUTED }}>
+          다음 버스
+        </div>
+        <div className="flex-1 text-center text-xs font-bold uppercase tracking-widest" style={{ color: FG_MUTED }}>
+          그 다음 버스
+        </div>
+      </div>
+      <div style={{ width: '52px' }} />
     </div>
   )
 }
 
-// ─── Route row ────────────────────────────────────────────────────────────────
-function RouteRow({ arrival, zebra }: { arrival: BusArrival; zebra: boolean }) {
-  const { arrivalSec: sec, restStopCount, isLowFloor, isLastBus, routeNo, routeType, currentStop, totalStops, latestStopName } = arrival
+// ─── Arrival Card ─────────────────────────────────────────────────────────────
+function ArrivalCard({ arrival, isPrimary }: { arrival: BusArrival; isPrimary: boolean }) {
+  const sec = arrival.arrivalSec
+  const mins = Math.floor(sec / 60)
+  const secs = sec % 60
   const isImmediate = sec < 60
-  const min = Math.floor(sec / 60)
   const isUrgent = sec < 600
-  const displayRouteNo = routeNo.replace(/\s*\(.*?\)\s*/g, '')
 
-  const routeColor = getRouteColor(routeType)
+  const mainColor = isImmediate ? FG_POINT : isUrgent ? '#D97706' : FG_TEXT
+  const subColor = isImmediate ? FG_POINT : isUrgent ? '#D97706' : FG_MUTED
+
+  return (
+    <div className={cn('flex flex-col items-center justify-center gap-2', isPrimary ? 'min-w-[200px]' : 'min-w-[160px]')}>
+      {isImmediate ? (
+        <span className="font-black animate-pulse tracking-tight"
+          style={{ fontSize: isPrimary ? '2.6rem' : '1.7rem', color: FG_POINT, lineHeight: 1 }}
+        >
+          곧 도착
+        </span>
+      ) : (
+        <div className={cn('flex items-baseline gap-0.5', !isPrimary && 'opacity-75')}>
+          <span className="font-extrabold tabular-nums"
+            style={{ fontSize: isPrimary ? '3rem' : '1.9rem', lineHeight: 1, color: mainColor }}
+          >
+            {mins}
+          </span>
+          <span className="font-semibold" style={{ fontSize: isPrimary ? '1.1rem' : '0.85rem', color: subColor }}>분</span>
+          <span className="font-bold tabular-nums ml-0.5"
+            style={{ fontSize: isPrimary ? '1.7rem' : '1.1rem', lineHeight: 1, color: subColor }}
+          >
+            {pad2(secs)}
+          </span>
+          <span className="font-semibold" style={{ fontSize: isPrimary ? '1.1rem' : '0.85rem', color: subColor }}>초</span>
+        </div>
+      )}
+
+      {/* 상태 뱃지 — 막차만 표시 */}
+      {arrival.isLastBus && (
+        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold"
+          style={{ background: '#FFF7ED', color: '#C2410C', border: '1px solid #FED7AA' }}
+        >막차</span>
+      )}
+
+      {/* 현재 위치 */}
+      <div className="flex items-center gap-2 flex-wrap justify-center">
+        {arrival.restStopCount > 0 && !isImmediate && (
+          <span
+            className="font-bold tabular-nums"
+            style={{ fontSize: isPrimary ? '1rem' : '0.8rem', color: FG_MUTED }}
+          >
+            {arrival.restStopCount}정류소 전
+          </span>
+        )}
+        {arrival.latestStopName && (
+          <div className="flex items-center gap-1 text-xs" style={{ color: '#9CA3AF' }}>
+            <MapPin size={10} />
+            <span className="truncate max-w-[120px]">{arrival.latestStopName}</span>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── Bus Row ──────────────────────────────────────────────────────────────────
+function BusRow({ group }: { group: GroupedRoute }) {
+  const { routeNo, routeType, arrivals } = group
+  const displayNo = routeNo.replace(/\s*\(.*?\)\s*/g, '')
+  const style = getRouteStyle(routeType)
+  const isNight = displayNo.startsWith('N') || displayNo.startsWith('n')
 
   return (
     <div
-      className={cn(
-        'flex items-center gap-4 px-6 py-3 rounded-[1.5rem] border transition-colors shadow-sm',
-        zebra ? 'bg-white border-white' : 'border-[#E8EAF6]',
-      )}
-      style={{ background: zebra ? '#ffffff' : SUB }}
+      className="flex items-center rounded-2xl overflow-hidden border transition-all duration-200"
+      style={{
+        background: isNight ? '#EFF6FF' : FG_CARD,
+        borderColor: isNight ? '#BFDBFE' : FG_BORDER,
+        boxShadow: isNight
+          ? '0 1px 4px rgba(59,130,246,0.08)'
+          : '0 1px 4px rgba(0,0,0,0.05)',
+      }}
     >
-      {/* Route number chip */}
+      {/* 왼쪽: 노선번호 */}
       <div
-        className="shrink-0 rounded-[1rem] flex items-center justify-center shadow-md pb-0.5"
-        style={{ background: routeColor, width: '7rem', height: '7rem' }}
+        className="flex flex-col items-center justify-center gap-2 py-5 px-5 self-stretch border-r"
+        style={{
+          minWidth: '140px',
+          background: isNight ? 'rgba(191,219,254,0.35)' : '#F9FAFB',
+          borderColor: isNight ? '#BFDBFE' : FG_BORDER,
+        }}
       >
-        <span className="text-white font-black text-center leading-tight drop-shadow-sm" style={{ fontSize: 'clamp(1.5rem, 3.5vw, 2.5rem)' }}>
-          {displayRouteNo}
-        </span>
+        <div className="flex items-center justify-center rounded-xl px-3 py-1.5" style={{ background: style.bg }}>
+          <span className="font-black tracking-tight"
+            style={{ fontSize: '1.6rem', lineHeight: 1.2, color: style.text }}
+          >
+            {displayNo}
+          </span>
+        </div>
+        {isNight && (
+          <span className="text-xs font-bold px-2 py-0.5 rounded-full"
+            style={{ background: 'rgba(191,219,254,0.6)', color: '#1D4ED8' }}
+          >심야</span>
+        )}
       </div>
 
-      {/* Middle — arrival time + badges + location bar */}
-      <div className="flex-1 flex items-center gap-6 min-w-0 pl-2">
-        {/* Left: time + badges */}
-        <div className="flex items-center gap-3 shrink-0 min-w-[200px]">
-          <div className="w-[10rem] shrink-0 flex items-center justify-start">
-            {isImmediate ? (
-              <span className="font-black animate-pulse tracking-tighter whitespace-nowrap" style={{ color: POINT, fontSize: '3.2rem' }}>
-                곧 도착
-              </span>
-            ) : (
-              <div className="flex items-baseline gap-1">
-                <span
-                  className="font-black tabular-nums tracking-tighter"
-                  style={{ color: isUrgent ? POINT : MAIN, fontSize: '4.8rem', lineHeight: '1' }}
-                >
-                  {min}
-                </span>
-                <span className="text-3xl font-black tracking-tight whitespace-nowrap" style={{ color: isUrgent ? POINT : MAIN }}>분</span>
-              </div>
-            )}
-          </div>
-
-          <div className="flex flex-col gap-1.5 justify-center">
-            <div className="flex items-center gap-2">
-              {isLowFloor && (
-                <Badge
-                  className="rounded-full text-white text-base font-bold px-3 py-1 border-0 leading-none shadow-sm"
-                  style={{ background: POINT }}
-                >
-                  ♿ 저상
-                </Badge>
-              )}
-              {isLastBus && (
-                <Badge
-                  className="rounded-full text-white text-base font-bold px-3 py-1 border-0 leading-none shadow-sm"
-                  style={{ background: POINT }}
-                >
-                  막차
-                </Badge>
-              )}
-            </div>
-            <div className="flex flex-col gap-0.5 mt-0.5">
-              {!isImmediate && restStopCount > 0 && (
-                <span className="text-xl text-slate-800 font-black tracking-tight whitespace-nowrap">
-                  {restStopCount}정거장 전
-                </span>
-              )}
-              <span className="text-base font-bold tracking-tight whitespace-nowrap" style={{ color: routeColor }}>
-                {getRouteTypeName(routeType)}
-              </span>
-            </div>
-          </div>
+      {/* 도착 정보 2칸 */}
+      <div className="flex items-center flex-1">
+        <div className="flex-1 flex items-center justify-center py-4 px-4 border-r" style={{ borderColor: FG_BORDER }}>
+          {arrivals[0]
+            ? <ArrivalCard arrival={arrivals[0]} isPrimary={true} />
+            : <span className="text-sm" style={{ color: FG_MUTED }}>정보 없음</span>
+          }
         </div>
-
-        {/* Location bar stretches here */}
-        <div className="flex-1 flex items-center pl-6 pr-4 relative mt-10">
-          {latestStopName && (
-            <div className="absolute bottom-full mb-2 right-4">
-              <span className="text-xl font-black tracking-tight text-slate-700">
-                {latestStopName}
-              </span>
-            </div>
-          )}
-          <LocationBar currentStop={currentStop} totalStops={totalStops} restStopCount={restStopCount} />
+        <div className="flex-1 flex items-center justify-center py-4 px-4 opacity-80">
+          {arrivals[1]
+            ? <ArrivalCard arrival={arrivals[1]} isPrimary={false} />
+            : <span className="text-sm" style={{ color: '#D1D5DB' }}>다음 버스 정보 없음</span>
+          }
         </div>
       </div>
+
     </div>
   )
 }
 
-// ─── Main list ────────────────────────────────────────────────────────────────
+// ─── Main List ────────────────────────────────────────────────────────────────
 function MainList({ arrivals, serviceEnded }: { arrivals: BusArrival[]; serviceEnded: boolean }) {
   const [page, setPage] = useState(0)
-  const itemsPerPage = 5
+  const itemsPerPage = 4
+  const groups = groupByRoute(arrivals)
 
   useEffect(() => {
-    if (arrivals.length <= itemsPerPage) {
-      setPage(0)
-      return
-    }
+    if (groups.length <= itemsPerPage) { setPage(0); return }
     const t = setInterval(() => {
-      setPage(p => {
-        const totalPages = Math.ceil(arrivals.length / itemsPerPage)
-        return (p + 1) % totalPages
-      })
-    }, 10000) // 10 seconds active duration per page
+      setPage(p => (p + 1) % Math.ceil(groups.length / itemsPerPage))
+    }, 10000)
     return () => clearInterval(t)
-  }, [arrivals.length, itemsPerPage])
-
-  useEffect(() => {
-    const totalPages = Math.ceil(arrivals.length / itemsPerPage)
-    if (page >= totalPages && totalPages > 0) {
-      setPage(0)
-    }
-  }, [arrivals.length, page, itemsPerPage])
+  }, [groups.length])
 
   if (serviceEnded) {
     return (
-      <section
-        className="flex-1 flex flex-col items-center justify-center gap-4 py-10"
-        style={{ background: '#F1F3FA' }}
-      >
-        <div
-          className="rounded-3xl flex flex-col items-center justify-center gap-3 px-12 py-10 shadow-lg"
-          style={{ background: MAIN }}
+      <section className="flex-1 flex flex-col items-center justify-center gap-4 py-10" style={{ background: FG_BG }}>
+        <div className="rounded-3xl flex flex-col items-center justify-center gap-3 px-12 py-10 border shadow-sm"
+          style={{ background: FG_CARD, borderColor: FG_BORDER }}
         >
           <span style={{ fontSize: '3rem', lineHeight: 1 }}>🌙</span>
-          <span className="text-white font-black tracking-tight" style={{ fontSize: '2.25rem' }}>
-            운행 종료
-          </span>
-          <span className="text-white/60 font-medium text-base">
-            금일 버스 운행이 모두 종료되었습니다
-          </span>
+          <span className="font-black tracking-tight" style={{ fontSize: '2.25rem', color: FG_TEXT }}>운행 종료</span>
+          <span className="font-medium text-base" style={{ color: FG_MUTED }}>금일 버스 운행이 모두 종료되었습니다</span>
         </div>
       </section>
     )
   }
 
-  const startIndex = page * itemsPerPage
-  const visibleArrivals = arrivals.slice(startIndex, Math.min(startIndex + itemsPerPage, arrivals.length))
-  const totalPages = Math.ceil(arrivals.length / itemsPerPage)
+  const totalPages = Math.ceil(groups.length / itemsPerPage)
+  const visible = groups.slice(page * itemsPerPage, (page + 1) * itemsPerPage)
 
   return (
-    <section
-      className="flex-1 px-4 py-3 flex flex-col gap-2 relative transition-all duration-300 overflow-hidden"
-      style={{ background: '#F1F3FA' }}
-    >
-      {/* Page indicator dot system */}
+    <section className="flex-1 px-8 py-3 flex flex-col gap-3 relative overflow-hidden" style={{ background: FG_BG }}>
       {totalPages > 1 && (
-        <div className="absolute top-1 right-6 flex gap-1.5 z-10 p-1">
+        <div className="absolute top-2 right-10 flex gap-1.5 z-10">
           {Array.from({ length: totalPages }).map((_, i) => (
-            <div
-              key={i}
-              className={cn(
-                "w-2.5 h-2.5 rounded-full transition-colors",
-                i === page ? "bg-[#1A237E]" : "bg-[#1A237E]/20"
-              )}
+            <div key={i} className="w-2 h-2 rounded-full transition-colors"
+              style={{ background: i === page ? FG_PRIMARY : '#D1D5DB' }}
             />
           ))}
         </div>
       )}
 
-      {visibleArrivals.map((a, i) => (
-        <RouteRow key={a.id} arrival={a} zebra={i % 2 === 0} />
-      ))}
+      {visible.map(g => <BusRow key={g.routeNo} group={g} />)}
+
     </section>
   )
 }
 
-// ─── Promo area ───────────────────────────────────────────────────────────────
+// ─── Promo Area ───────────────────────────────────────────────────────────────
 const PROMO_SLIDES = [
-  { text: '강화도 고인돌 — 유네스코 세계문화유산', gradient: 'linear-gradient(135deg, #1B5E20, #388E3C)' },
-  { text: '2026 강화 딸기 축제 · 4.18 ~ 4.20', gradient: 'linear-gradient(135deg, #B71C1C, #E53935)' },
-  { text: '강화 역사관  매일 09:00 ~ 18:00', gradient: `linear-gradient(135deg, ${MAIN}, #3949AB)` },
+  { text: '강화도 고인돌 — 유네스코 세계문화유산', gradient: 'linear-gradient(135deg, #1E3A5F 0%, #2B5276 100%)' },
+  { text: '2026 강화 딸기 축제 · 4.18 ~ 4.20', gradient: 'linear-gradient(135deg, #7C1D1D 0%, #991B1B 100%)' },
+  { text: '강화 역사관  매일 09:00 ~ 18:00', gradient: 'linear-gradient(135deg, #064E3B 0%, #065F46 100%)' },
 ]
 
 function PromoArea({ scenario }: { scenario: PromoScenario | null }) {
@@ -545,21 +490,13 @@ function PromoArea({ scenario }: { scenario: PromoScenario | null }) {
   const useScenario = activeBlocks.length > 0
   const total = useScenario ? activeBlocks.length : PROMO_SLIDES.length
 
-  // 시나리오가 바뀌면 첫 번째 블록으로 리셋
-  useEffect(() => {
-    setIdx(0)
-    setVisible(true)
-  }, [scenario?.scenarioId])
+  useEffect(() => { setIdx(0); setVisible(true) }, [scenario?.scenarioId])
 
   const advance = useCallback(() => {
     setVisible(false)
-    setTimeout(() => {
-      setIdx(i => (i + 1) % total)
-      setVisible(true)
-    }, 400)
+    setTimeout(() => { setIdx(i => (i + 1) % total); setVisible(true) }, 400)
   }, [total])
 
-  // 블록/슬라이드 자동 전환 타이머
   useEffect(() => {
     const ms = useScenario ? (activeBlocks[idx % activeBlocks.length]?.displaySec ?? 5) * 1000 : 5000
     const t = setTimeout(advance, ms)
@@ -569,49 +506,30 @@ function PromoArea({ scenario }: { scenario: PromoScenario | null }) {
   if (useScenario) {
     const block = activeBlocks[idx % activeBlocks.length]
     return (
-      <section
-        className="shrink-0 mx-4 mb-3 rounded-[2rem] overflow-hidden shadow-lg"
-        style={{ background: '#000', height: '30vh' }}
+      <section className="shrink-0 mx-8 mb-3 rounded-2xl overflow-hidden border shadow-sm"
+        style={{ background: '#000', height: '28vh', borderColor: FG_BORDER }}
       >
-        <div
-          className="w-full h-full transition-opacity duration-[400ms]"
-          style={{ opacity: visible ? 1 : 0 }}
-        >
-          {block.fileType === 'video' ? (
-            <video
-              key={block.mediaUrl}
-              src={block.mediaUrl}
-              autoPlay
-              muted
-              loop
-              playsInline
-              className="w-full h-full object-cover"
-            />
-          ) : (
-            <img
-              key={block.mediaUrl}
-              src={block.mediaUrl}
-              alt=""
-              className="w-full h-full object-cover"
-            />
-          )}
+        <div className="w-full h-full transition-opacity duration-[400ms]" style={{ opacity: visible ? 1 : 0 }}>
+          {block.fileType === 'video'
+            ? <video key={block.mediaUrl} src={block.mediaUrl} autoPlay muted loop playsInline className="w-full h-full object-cover" />
+            : <img key={block.mediaUrl} src={block.mediaUrl} alt="" className="w-full h-full object-cover" />
+          }
         </div>
       </section>
     )
   }
 
-  // 기본 슬라이드 (시나리오 없을 때)
   const slide = PROMO_SLIDES[idx % PROMO_SLIDES.length]
   return (
-    <section
-      className="shrink-0 mx-4 mb-3 rounded-[2rem] overflow-hidden flex items-center justify-center shadow-lg"
-      style={{ background: '#ffffff', height: '30vh' }}
+    <section className="shrink-0 mx-8 mb-3 rounded-2xl overflow-hidden flex items-center justify-center border shadow-sm"
+      style={{ borderColor: FG_BORDER, height: '28vh' }}
     >
-      <div
-        className="w-full h-full flex items-center justify-center px-10 transition-opacity duration-[400ms]"
+      <div className="w-full h-full flex items-center justify-center px-10 transition-opacity duration-[400ms]"
         style={{ background: slide.gradient, opacity: visible ? 1 : 0 }}
       >
-        <p className="text-white font-black text-center break-keep" style={{ fontSize: 'clamp(2rem, 5.5vh, 4rem)', textShadow: '0 3px 6px rgba(0,0,0,0.3)' }}>
+        <p className="text-white font-black text-center break-keep drop-shadow-md"
+          style={{ fontSize: 'clamp(1.8rem, 4.5vh, 3.5rem)' }}
+        >
           {slide.text}
         </p>
       </div>
@@ -619,32 +537,31 @@ function PromoArea({ scenario }: { scenario: PromoScenario | null }) {
   )
 }
 
-// ─── Footer ticker ────────────────────────────────────────────────────────────
+// ─── Footer Ticker ────────────────────────────────────────────────────────────
 const NOTICES = [
-  '강화터미널 버스 도착 정보는 실시간으로 제공됩니다.',
+  '버스 도착 정보는 실제와 다를 수 있습니다.',
+  '버스 내에서는 뛰지 마시고 안전하게 이용해 주세요.',
+  '노약자석은 노인·임산부·장애인을 위한 자리입니다.',
+  '버스를 기다리실 때는 차도에서 한 걸음 물러서 주세요.',
   '기상 악화 시 버스 운행 지연이 발생할 수 있습니다.',
-  '버스 내에서는 음식물 섭취를 자제해 주세요.',
-  '노약자 및 임산부에게 자리를 양보해 주세요.',
-  '인천광역시 강화군 버스 정보 안내 단말기',
-].join('    ·    ')
+]
 
 function FooterTicker({ tickerText }: { tickerText: string | null }) {
-  const content = tickerText ?? NOTICES
+  const messages = tickerText ? [tickerText] : NOTICES
+  const fullText = messages.join('     ·     ')
+
   return (
-    <footer
-      className="shrink-0 flex items-center overflow-hidden"
-      style={{ background: MAIN, height: '6vh' }}
+    <footer className="shrink-0 mx-8 mb-4 flex items-stretch rounded-2xl overflow-hidden border shadow-sm"
+      style={{ borderColor: '#D1D5DB', minHeight: '6vh' }}
     >
-      <div
-        className="shrink-0 flex items-center px-4 h-full border-r"
-        style={{ borderColor: 'rgba(255,255,255,0.15)' }}
-      >
-        <span className="text-white/60 text-[10px] font-black tracking-[0.2em] uppercase">공지</span>
+      <div className="flex items-center gap-2 px-5 shrink-0" style={{ background: '#1F2937', minWidth: '130px' }}>
+        <Info size={16} className="text-yellow-300 shrink-0" />
+        <span className="text-sm font-bold text-white whitespace-nowrap">운행 정보</span>
       </div>
-      <div className="flex-1 overflow-hidden h-full flex items-center">
-        <div className="marquee-ticker whitespace-nowrap text-white/80 text-sm font-medium">
-          <span>{content}&emsp;&emsp;&emsp;&emsp;</span>
-          <span>{content}&emsp;&emsp;&emsp;&emsp;</span>
+      <div className="flex-1 overflow-hidden flex items-center" style={{ background: '#374151' }}>
+        <div className="marquee-ticker whitespace-nowrap text-white font-medium" style={{ fontSize: '0.95rem' }}>
+          <span>{fullText}&emsp;&emsp;&emsp;&emsp;</span>
+          <span>{fullText}&emsp;&emsp;&emsp;&emsp;</span>
         </div>
       </div>
     </footer>
@@ -664,13 +581,11 @@ export default function Home() {
   const [winSize, setWinSize] = useState<{ w: number; h: number } | null>(null)
   const [showDebugOverlay, setShowDebugOverlay] = useState(false)
 
-  // Real-time clock
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000)
     return () => clearInterval(t)
   }, [])
 
-  // Capture viewport size (for kiosk debugging)
   useEffect(() => {
     const update = () => setWinSize({ w: window.innerWidth, h: window.innerHeight })
     update()
@@ -678,7 +593,6 @@ export default function Home() {
     return () => window.removeEventListener('resize', update)
   }, [])
 
-  // 설정값 로드 (showDebugOverlay 등)
   useEffect(() => {
     fetch(`${BRIDGE_URL}/api/settings`)
       .then(r => r.json())
@@ -686,10 +600,8 @@ export default function Home() {
       .catch(() => { })
   }, [])
 
-  // 정류소 이름 + 단축 ID (브리지 기동 직후·재시작 등으로 첫 응답이 비어 있을 수 있어 몇 차례 재시도)
   useEffect(() => {
     let cancelled = false
-
     const load = async (attempt: number) => {
       if (cancelled || attempt > 10) return
       try {
@@ -699,26 +611,17 @@ export default function Home() {
         if (json.data?.bstopNm) setStopName(json.data.bstopNm)
         if (json.data?.shortBstopId) setShortBstopId(json.data.shortBstopId)
         if (json.data?.bstopNm && json.data?.shortBstopId) return
-      } catch {
-        /* noop */
-      }
-      if (!cancelled) {
-        window.setTimeout(() => void load(attempt + 1), 2000)
-      }
+      } catch { /* noop */ }
+      if (!cancelled) window.setTimeout(() => void load(attempt + 1), 2000)
     }
-
     void load(0)
-    return () => {
-      cancelled = true
-    }
+    return () => { cancelled = true }
   }, [])
 
-  // 날씨 정보 로드 — 서버 준비 전이면 3초마다 재시도, 성공 후 10분 주기 갱신
   useEffect(() => {
     let cancelled = false
     let retryTimer: ReturnType<typeof setTimeout> | null = null
     let pollTimer: ReturnType<typeof setInterval> | null = null
-
     const tryLoad = async () => {
       try {
         const r = await fetch(`${BRIDGE_URL}/api/weather`)
@@ -726,7 +629,6 @@ export default function Home() {
         if (cancelled) return
         if (json.data) {
           setWeather(json.data)
-          // 성공 시 10분 주기 갱신 시작
           pollTimer = setInterval(async () => {
             try {
               const r2 = await fetch(`${BRIDGE_URL}/api/weather`)
@@ -737,10 +639,8 @@ export default function Home() {
           return
         }
       } catch { /* noop */ }
-      // 데이터 없으면 3초 후 재시도
       if (!cancelled) retryTimer = setTimeout(tryLoad, 3000)
     }
-
     void tryLoad()
     return () => {
       cancelled = true
@@ -749,61 +649,39 @@ export default function Home() {
     }
   }, [])
 
-  // TTS — 곧 도착 버스가 있을 때마다 음성 공지 (arrivals 갱신 주기마다)
   useEffect(() => {
     const soonRoutes = arrivals
       .filter(isSoonArriving)
-      .map(a => toSinoKorean(a.routeNo.replace(/\(.*?\)/g, '').trim())) // 한자어: "32" → "삼십이"
+      .map(a => toSinoKorean(a.routeNo.replace(/\(.*?\)/g, '').trim()))
     if (soonRoutes.length === 0) return
-
     const routeText = soonRoutes.length === 1
       ? `${soonRoutes[0]}번`
       : `${soonRoutes.slice(0, -1).join('번, ')}번, ${soonRoutes.at(-1)}번`
     const text = `잠시 후 도착 버스는 ${routeText} 입니다.`
-
     const audio = new Audio(`${BRIDGE_URL}/api/tts/speak?${new URLSearchParams({ text })}`)
     audio.play().catch(() => { })
   }, [arrivals])
 
-  // 홍보 시나리오 SSE 구독 (onerror 시 3초 후 재연결)
   useEffect(() => {
     let es: EventSource | null = null
     let retryTimer: ReturnType<typeof setTimeout> | null = null
-
     function connect() {
       es = new EventSource(`${BRIDGE_URL}/api/promo/stream`)
-
       es.addEventListener('promo', (e) => {
         try {
           const msg = JSON.parse(e.data)
-          if (msg.type === 'scenario') {
-            setPromoScenario(msg.data)
-            setTickerText(msg.data.tickerText ?? null)
-          } else if (msg.type === 'stop') {
-            setPromoScenario(null)
-            setTickerText(null)
-          }
+          if (msg.type === 'scenario') { setPromoScenario(msg.data); setTickerText(msg.data.tickerText ?? null) }
+          else if (msg.type === 'stop') { setPromoScenario(null); setTickerText(null) }
         } catch { /* noop */ }
       })
-
-      es.onerror = () => {
-        es?.close()
-        es = null
-        retryTimer = setTimeout(connect, 3000)
-      }
+      es.onerror = () => { es?.close(); es = null; retryTimer = setTimeout(connect, 3000) }
     }
-
     connect()
-    return () => {
-      if (retryTimer) clearTimeout(retryTimer)
-      es?.close()
-    }
+    return () => { if (retryTimer) clearTimeout(retryTimer); es?.close() }
   }, [])
 
-  // SSE 구독 — 서버에서 20초마다 푸시
   useEffect(() => {
     const es = new EventSource(`${BRIDGE_URL}/api/bus/arrivals/stream`)
-
     es.addEventListener('arrivals', (e) => {
       try {
         const data = JSON.parse(e.data)
@@ -813,19 +691,18 @@ export default function Home() {
         }
       } catch { /* noop */ }
     })
-
     return () => es.close()
   }, [])
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
+    <div className="flex-1 flex flex-col overflow-hidden" style={{ background: FG_BG }}>
       <BitHeader now={now} stopName={stopName} shortBstopId={shortBstopId} weather={weather} />
       <SoonArriving arrivals={arrivals} />
+      <ColumnLabels />
       <MainList arrivals={arrivals} serviceEnded={serviceEnded} />
       <PromoArea scenario={promoScenario} />
       <FooterTicker tickerText={tickerText} />
       <LogPanel />
-      {/* setting.json showDebugOverlay: true 일 때만 표시 */}
       {showDebugOverlay && winSize && (
         <div className="fixed bottom-2 left-2 z-[9999] bg-black/70 text-white text-sm font-mono px-3 py-1.5 rounded-lg pointer-events-none">
           {winSize.w} × {winSize.h} px

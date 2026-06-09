@@ -97,6 +97,10 @@
   }
 }
 
+html {
+  font-size: 19.2px; /* 16px × 1.2 — 전체 텍스트 1.2배 확대 */
+}
+
 /* ─── BIT marquee ticker ──────────────────────────────────────────────────── */
 @keyframes marquee {
   from { transform: translateX(0); }
