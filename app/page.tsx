@@ -7,14 +7,15 @@ import { cn } from '@/lib/utils'
 import { LogPanel } from '@/components/log-panel'
 
 // ─── Color palette ────────────────────────────────────────────────────────────
-const MAIN = '#1A237E' // deep navy
-const SUB = '#E8EAF6' // soft sky blue
-const POINT = '#ED1C24' // red
-/** 헤더 전용: 평면 네이비보다 깊이감 있게 */
+const MAIN = '#1A237E'       // 네이비 — 헤더·푸터·기본 텍스트
+const SUB = '#E8EAF6'        // 연청 — SoonArriving 배경·교차 행
+const POINT = '#ED1C24'      // 빨강 — 임박·저상·막차
 const HEADER_GRADIENT =
-  'linear-gradient(168deg, #283593 0%, #1A237E 42%, #0d1447 100%)'
-const HEADER_MUTED = 'rgba(232, 234, 246, 0.62)'
-const HEADER_WEATHER = '#FFE082' // 앰버 — 쨍한 노랑보다 네이비와 잘 어울림
+  'linear-gradient(160deg, #1A237E 0%, #283593 60%, #1565C0 100%)'
+const HEADER_MUTED = 'rgba(232, 234, 246, 0.75)'
+const HEADER_WEATHER = '#FDD835' // 노란빛 — 날씨 아이콘
+const HEADER_TEXT = '#FFFFFF'
+const HEADER_TEXT_MUTED = 'rgba(255, 255, 255, 0.80)'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface WeatherData {
@@ -139,7 +140,7 @@ function BitHeader({ now, stopName, shortBstopId, weather }: { now: Date; stopNa
         <p
           className="font-bold tracking-[0.2em] uppercase leading-none"
           style={{
-            color: HEADER_MUTED,
+            color: HEADER_TEXT_MUTED,
             fontSize: 'clamp(0.7rem, 1.85vh, 1.05rem)',
           }}
         >
@@ -148,7 +149,7 @@ function BitHeader({ now, stopName, shortBstopId, weather }: { now: Date; stopNa
         <h1
           className="font-black tracking-tight line-clamp-2 leading-[1.08] drop-shadow-sm max-w-full"
           style={{
-            color: SUB,
+            color: HEADER_TEXT,
             fontSize: 'clamp(1.85rem, 5vh, 4rem)',
             textShadow: '0 1px 2px rgba(0,0,0,0.2)',
           }}
@@ -170,7 +171,7 @@ function BitHeader({ now, stopName, shortBstopId, weather }: { now: Date; stopNa
           </div>
           <div
             className="tabular-nums font-medium"
-            style={{ color: HEADER_MUTED, fontSize: 'clamp(0.6rem, 1.5vh, 0.9rem)' }}
+            style={{ color: HEADER_TEXT_MUTED, fontSize: 'clamp(0.6rem, 1.5vh, 0.9rem)' }}
           >
             {weather?.minTemp != null && weather?.maxTemp != null
               ? `${Math.round(weather.minTemp)}° ~ ${Math.round(weather.maxTemp)}°`
@@ -180,7 +181,7 @@ function BitHeader({ now, stopName, shortBstopId, weather }: { now: Date; stopNa
         <p
           className="font-semibold leading-tight px-1"
           style={{
-            color: HEADER_MUTED,
+            color: HEADER_TEXT_MUTED,
             fontSize: 'clamp(0.75rem, 2vh, 1.2rem)',
           }}
         >
@@ -197,7 +198,7 @@ function BitHeader({ now, stopName, shortBstopId, weather }: { now: Date; stopNa
           <p
             className="font-mono font-bold tabular-nums tracking-[0.06em] leading-none"
             style={{
-              color: SUB,
+              color: HEADER_TEXT,
               fontSize: 'clamp(1.45rem, 3.8vh, 2.85rem)',
             }}
           >
@@ -210,11 +211,11 @@ function BitHeader({ now, stopName, shortBstopId, weather }: { now: Date; stopNa
 }
 
 function getRouteColor(routeType: string) {
-  if (routeType === '0') return '#13908f'
-  if (routeType === '1') return '#011ff6'
-  if (routeType === '6') return '#b6982a'
-  if (routeType === '9') return '#3d9c3e'
-  return MAIN
+  if (routeType === '0') return '#13908f' // 일반버스
+  if (routeType === '1') return '#1565C0' // 지선버스
+  if (routeType === '6') return '#b6982a' // 마을버스
+  if (routeType === '9') return '#3d9c3e' // 순환버스
+  return '#13908f'
 }
 
 function getRouteTypeName(routeType: string) {
@@ -244,8 +245,8 @@ function SoonArriving({ arrivals }: { arrivals: BusArrival[] }) {
 
   return (
     <section
-      className="shrink-0 flex items-center gap-5 px-6"
-      style={{ background: SUB, height: '6.5vh' }}
+      className="shrink-0 flex items-center gap-5 px-6 border-b"
+      style={{ background: SUB, height: '6.5vh', borderColor: '#C5CAE9' }}
     >
       <div className="flex items-center gap-3 shrink-0">
         <span className="relative flex h-5 w-5">
@@ -259,20 +260,26 @@ function SoonArriving({ arrivals }: { arrivals: BusArrival[] }) {
           잠시 후 도착
         </span>
       </div>
-      <div className="w-1 h-8 rounded-full" style={{ background: `${MAIN}30` }} />
+      <div className="w-px h-8 rounded-full" style={{ background: '#9FA8DA' }} />
       <div className="flex flex-wrap gap-3">
         {soon.length > 0 ? (
-          soon.map(a => (
-            <Badge
-              key={a.id}
-              className="rounded-full text-white text-2xl font-black px-6 py-2 border-0 shadow-sm"
-              style={{ background: getRouteColor(a.routeType) }}
-            >
-              {a.routeNo.replace(/\s*\(.*?\)\s*/g, '')}
-            </Badge>
-          ))
+          soon.map(a => {
+            const routeColor = getRouteColor(a.routeType)
+            return (
+              <Badge
+                key={a.id}
+                className="rounded-full text-2xl font-black px-6 py-2 shadow-sm"
+                style={{
+                  background: routeColor,
+                  color: '#FFFFFF',
+                }}
+              >
+                {a.routeNo.replace(/\s*\(.*?\)\s*/g, '')}
+              </Badge>
+            )
+          })
         ) : (
-          <span className="text-2xl font-bold" style={{ color: `${MAIN}60` }}>
+          <span className="text-2xl font-bold" style={{ color: '#7986CB' }}>
             3분 이내 도착 예정 버스 없음
           </span>
         )}
@@ -316,14 +323,14 @@ function LocationBar({ currentStop, totalStops, restStopCount }: { currentStop: 
                 <div
                   className="flex-1 h-2"
                   style={{
-                    backgroundImage: 'radial-gradient(circle, #D1D5DB 3px, transparent 3px)',
+                    backgroundImage: 'radial-gradient(circle, #9FA8DA 3px, transparent 3px)',
                     backgroundSize: '12px 8px',
                     backgroundPosition: 'center',
                     backgroundRepeat: 'repeat-x'
                   }}
                 />
               ) : (
-                <div className="flex-1 h-2" style={{ background: '#D1D5DB' }} />
+                <div className="flex-1 h-2" style={{ background: '#9FA8DA' }} />
               )
             )}
 
@@ -335,10 +342,10 @@ function LocationBar({ currentStop, totalStops, restStopCount }: { currentStop: 
                 </span>
               ) : (
                 <div
-                  className="w-8 h-8 rounded-full border-[4px] bg-white shadow-sm z-0 flex items-center justify-center"
-                  style={{ borderColor: '#D1D5DB' }}
+                  className="w-8 h-8 rounded-full border-[4px] shadow-sm z-0 flex items-center justify-center"
+                  style={{ borderColor: '#7986CB', background: '#E8EAF6' }}
                 >
-                  <span className="text-[13px] font-black tracking-tighter" style={{ color: '#4B5563', lineHeight: '1' }}>
+                  <span className="text-[13px] font-black tracking-tighter" style={{ color: MAIN, lineHeight: '1' }}>
                     {nodeValue}
                   </span>
                 </div>
@@ -365,16 +372,27 @@ function RouteRow({ arrival, zebra }: { arrival: BusArrival; zebra: boolean }) {
     <div
       className={cn(
         'flex items-center gap-4 px-6 py-3 rounded-[1.5rem] border transition-colors shadow-sm',
-        zebra ? 'bg-white border-white' : 'border-[#E8EAF6]',
+        zebra ? 'border-indigo-100' : 'border-white',
       )}
-      style={{ background: zebra ? '#ffffff' : SUB }}
+      style={{ background: zebra ? '#F3F4FB' : '#FFFFFF' }}
     >
       {/* Route number chip */}
       <div
         className="shrink-0 rounded-[1rem] flex items-center justify-center shadow-md pb-0.5"
-        style={{ background: routeColor, width: '7rem', height: '7rem' }}
+        style={{
+          background: routeColor,
+          width: '7rem',
+          height: '7rem',
+        }}
       >
-        <span className="text-white font-black text-center leading-tight drop-shadow-sm" style={{ fontSize: 'clamp(1.5rem, 3.5vw, 2.5rem)' }}>
+        <span
+          className="font-black text-center leading-tight"
+          style={{
+            fontSize: 'clamp(1.5rem, 3.5vw, 2.5rem)',
+            color: '#FFFFFF',
+            textShadow: '0 1px 3px rgba(0,0,0,0.3)',
+          }}
+        >
           {displayRouteNo}
         </span>
       </div>
@@ -422,7 +440,7 @@ function RouteRow({ arrival, zebra }: { arrival: BusArrival; zebra: boolean }) {
             </div>
             <div className="flex flex-col gap-0.5 mt-0.5">
               {!isImmediate && restStopCount > 0 && (
-                <span className="text-xl text-slate-800 font-black tracking-tight whitespace-nowrap">
+                <span className="text-xl font-black tracking-tight whitespace-nowrap" style={{ color: '#455A64' }}>
                   {restStopCount}정거장 전
                 </span>
               )}
@@ -437,7 +455,7 @@ function RouteRow({ arrival, zebra }: { arrival: BusArrival; zebra: boolean }) {
         <div className="flex-1 flex items-center pl-6 pr-4 relative mt-10">
           {latestStopName && (
             <div className="absolute bottom-full mb-2 right-4">
-              <span className="text-xl font-black tracking-tight text-slate-700">
+              <span className="text-xl font-black tracking-tight" style={{ color: '#546E7A' }}>
                 {latestStopName}
               </span>
             </div>
@@ -479,17 +497,17 @@ function MainList({ arrivals, serviceEnded }: { arrivals: BusArrival[]; serviceE
     return (
       <section
         className="flex-1 flex flex-col items-center justify-center gap-4 py-10"
-        style={{ background: '#F1F3FA' }}
+        style={{ background: '#F5F6FF' }}
       >
         <div
-          className="rounded-3xl flex flex-col items-center justify-center gap-3 px-12 py-10 shadow-lg"
-          style={{ background: MAIN }}
+          className="rounded-3xl flex flex-col items-center justify-center gap-3 px-12 py-10 shadow-lg border"
+          style={{ background: '#FFFFFF', borderColor: '#C5CAE9' }}
         >
           <span style={{ fontSize: '3rem', lineHeight: 1 }}>🌙</span>
-          <span className="text-white font-black tracking-tight" style={{ fontSize: '2.25rem' }}>
+          <span className="font-black tracking-tight" style={{ fontSize: '2.25rem', color: MAIN }}>
             운행 종료
           </span>
-          <span className="text-white/60 font-medium text-base">
+          <span className="font-medium text-base" style={{ color: '#78909C' }}>
             금일 버스 운행이 모두 종료되었습니다
           </span>
         </div>
@@ -504,7 +522,7 @@ function MainList({ arrivals, serviceEnded }: { arrivals: BusArrival[]; serviceE
   return (
     <section
       className="flex-1 px-4 py-3 flex flex-col gap-2 relative transition-all duration-300 overflow-hidden"
-      style={{ background: '#F1F3FA' }}
+      style={{ background: '#F0F2FF' }}
     >
       {/* Page indicator dot system */}
       {totalPages > 1 && (
@@ -514,8 +532,9 @@ function MainList({ arrivals, serviceEnded }: { arrivals: BusArrival[]; serviceE
               key={i}
               className={cn(
                 "w-2.5 h-2.5 rounded-full transition-colors",
-                i === page ? "bg-[#1A237E]" : "bg-[#1A237E]/20"
+                i === page ? "" : ""
               )}
+              style={{ background: i === page ? MAIN : '#C5CAE9' }}
             />
           ))}
         </div>
@@ -530,9 +549,9 @@ function MainList({ arrivals, serviceEnded }: { arrivals: BusArrival[]; serviceE
 
 // ─── Promo area ───────────────────────────────────────────────────────────────
 const PROMO_SLIDES = [
-  { text: '강화도 고인돌 — 유네스코 세계문화유산', gradient: 'linear-gradient(135deg, #1B5E20, #388E3C)' },
-  { text: '2026 강화 딸기 축제 · 4.18 ~ 4.20', gradient: 'linear-gradient(135deg, #B71C1C, #E53935)' },
-  { text: '강화 역사관  매일 09:00 ~ 18:00', gradient: `linear-gradient(135deg, ${MAIN}, #3949AB)` },
+  { text: '강화도 고인돌 — 유네스코 세계문화유산', gradient: 'linear-gradient(135deg, #1A237E 0%, #283593 100%)' },
+  { text: '2026 강화 딸기 축제 · 4.18 ~ 4.20', gradient: 'linear-gradient(135deg, #B71C1C 0%, #C62828 100%)' },
+  { text: '강화 역사관  매일 09:00 ~ 18:00', gradient: 'linear-gradient(135deg, #004D40 0%, #00695C 100%)' },
 ]
 
 function PromoArea({ scenario }: { scenario: PromoScenario | null }) {
@@ -605,7 +624,7 @@ function PromoArea({ scenario }: { scenario: PromoScenario | null }) {
   return (
     <section
       className="shrink-0 mx-4 mb-3 rounded-[2rem] overflow-hidden flex items-center justify-center shadow-lg"
-      style={{ background: '#ffffff', height: '30vh' }}
+      style={{ background: MAIN, height: '30vh' }}
     >
       <div
         className="w-full h-full flex items-center justify-center px-10 transition-opacity duration-[400ms]"
@@ -637,12 +656,12 @@ function FooterTicker({ tickerText }: { tickerText: string | null }) {
     >
       <div
         className="shrink-0 flex items-center px-4 h-full border-r"
-        style={{ borderColor: 'rgba(255,255,255,0.15)' }}
+        style={{ borderColor: 'rgba(255,255,255,0.2)' }}
       >
-        <span className="text-white/60 text-[10px] font-black tracking-[0.2em] uppercase">공지</span>
+        <span className="text-[10px] font-black tracking-[0.2em] uppercase" style={{ color: '#C5CAE9' }}>공지</span>
       </div>
       <div className="flex-1 overflow-hidden h-full flex items-center">
-        <div className="marquee-ticker whitespace-nowrap text-white/80 text-sm font-medium">
+        <div className="marquee-ticker whitespace-nowrap text-sm font-medium" style={{ color: '#E8EAF6' }}>
           <span>{content}&emsp;&emsp;&emsp;&emsp;</span>
           <span>{content}&emsp;&emsp;&emsp;&emsp;</span>
         </div>
