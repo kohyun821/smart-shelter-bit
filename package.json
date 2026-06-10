@@ -50,6 +50,7 @@
     "dotenv": "^17.3.1",
     "embla-carousel-react": "^8.5.2",
     "express": "^5.2.1",
+    "hls.js": "^1.6.16",
     "input-otp": "^1.4.2",
     "lucide-react": "^0.474.0",
     "msedge-tts": "^2.0.4",

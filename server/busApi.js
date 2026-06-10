@@ -17,9 +17,10 @@ require('dotenv').config({ path: path.join(getResourcesPath(), '.env') })
 
 // ─── Base URLs (lib/api/bus.ts와 동일하게 유지) ───────────────────────────────
 
-const BASE_STATION_URL = 'http://apis.data.go.kr/6280000/busStationService'
-const BASE_ROUTE_URL   = 'http://apis.data.go.kr/6280000/busRouteService'
-const BASE_ARRIVAL_URL = 'http://apis.data.go.kr/6280000/busArrivalService'
+const BASE_STATION_URL  = 'http://apis.data.go.kr/6280000/busStationService'
+const BASE_ROUTE_URL    = 'http://apis.data.go.kr/6280000/busRouteService'
+const BASE_ARRIVAL_URL  = 'http://apis.data.go.kr/6280000/busArrivalService'
+const BASE_LOCATION_URL = 'http://apis.data.go.kr/6280000/busLocationService'
 
 // ─── In-memory cache ──────────────────────────────────────────────────────────
 
@@ -241,6 +242,31 @@ async function fetchAllRouteBusArrivalList(bstopId) {
   return parseXml(xml, ARRIVAL_FIELDS)
 }
 
+// ─── getBusRouteLocation ──────────────────────────────────────────────────────
+
+const LOCATION_FIELDS = [
+  'ROUTEID', 'BUSID', 'BUS_NUM_PLATE', 'CONGESTION', 'DIRCD',
+  'LASTBUSYN', 'LATEST_STOPSEQ', 'LATEST_STOP_ID', 'LATEST_STOP_NAME',
+  'LOW_TP_CD', 'PATHSEQ',
+]
+
+/**
+ * 노선 내 운행 중인 전체 버스 위치 조회 — 도착정보 API가 주지 않는 후속 버스 보강용.
+ * 폴링 주기마다 호출되므로 HTTP 로그를 남기지 않습니다.
+ * @param {string} routeId
+ * @returns {Promise<Array>}
+ */
+async function fetchBusRouteLocation(routeId) {
+  const serviceKey = getServiceKey()
+  const url = `${BASE_LOCATION_URL}/getBusRouteLocation?serviceKey=${serviceKey}&routeId=${routeId}&pageNo=1&numOfRows=255`
+
+  const response = await fetch(url)
+  if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
+
+  const xml = await response.text()
+  return parseXml(xml, LOCATION_FIELDS)
+}
+
 /**
  * 현재 운행 중인 ROUTEID Set만 반환합니다. (재시도 우선순위 결정용)
  * @param {string} bstopId
@@ -432,6 +458,7 @@ module.exports = {
   getBusStationNmList,
   getBusRouteSectionList,
   fetchAllRouteBusArrivalList,
+  fetchBusRouteLocation,
   getViaRouteCache,
   getBstopNm,
   getStopShortId,

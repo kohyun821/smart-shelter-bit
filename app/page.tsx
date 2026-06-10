@@ -1,7 +1,8 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
-import { Sun, Cloud, CloudRain, CloudSnow, MapPin, Calendar, Info } from 'lucide-react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import Hls from 'hls.js'
+import { Sun, Cloud, CloudRain, CloudSnow, MapPin, Calendar, Info, Video } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { LogPanel } from '@/components/log-panel'
 
@@ -81,8 +82,6 @@ const T = () => _theme
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface WeatherData {
   temp: number | null
-  minTemp: number | null
-  maxTemp: number | null
   sky: number | null
   pty: number
 }
@@ -107,7 +106,7 @@ interface BusArrival {
   id: string
   routeNo: string
   routeType: string
-  arrivalSec: number
+  arrivalSec: number | null   // null = 위치 API 기반 (도착 시간 미제공)
   restStopCount: number
   isLowFloor: boolean
   isLastBus: boolean
@@ -144,7 +143,7 @@ function toSinoKorean(numStr: string): string {
 }
 
 function isSoonArriving(a: BusArrival) {
-  return a.arrivalSec <= 239 || a.restStopCount <= 2
+  return (a.arrivalSec ?? Infinity) <= 239 || a.restStopCount <= 2
 }
 
 function isBlockActive(block: PromoBlock): boolean {
@@ -176,8 +175,9 @@ function getRouteStyle(routeType: string) {
 // ─── 날씨 아이콘 ──────────────────────────────────────────────────────────────
 function WeatherIcon({ sky, pty, size = 16 }: { sky: number | null; pty: number; size?: number }) {
   const p = { size, strokeWidth: 2, className: 'shrink-0' } as const
-  if (pty > 0) return pty === 3 ? <CloudSnow {...p} /> : <CloudRain {...p} />
-  if (sky === 3 || sky === 4) return <Cloud {...p} />
+  if (pty === 1 || pty === 4) return <CloudRain {...p} />   // 비, 소나기
+  if (pty === 2 || pty === 3) return <CloudSnow {...p} />   // 비/눈, 눈
+  if (sky === 3 || sky === 4) return <Cloud {...p} />        // 구름많음, 흐림
   return <Sun {...p} />
 }
 
@@ -239,11 +239,6 @@ function BitHeader({ now, stopName, shortBstopId, weather }: {
           </span>
           <span className="font-bold tabular-nums" style={{ fontSize: '1.2rem', color: th.text }}>
             {weather?.temp != null ? `${Math.round(weather.temp)}°C` : '—'}
-          </span>
-          <span className="text-xs font-medium" style={{ color: th.muted }}>
-            {weather?.minTemp != null && weather?.maxTemp != null
-              ? `${Math.round(weather.minTemp)}° ~ ${Math.round(weather.maxTemp)}°`
-              : ''}
           </span>
         </div>
         <div className="flex items-center gap-1.5" style={{ color: th.muted }}>
@@ -345,10 +340,11 @@ function ColumnLabels() {
 function ArrivalCard({ arrival, isPrimary }: { arrival: BusArrival; isPrimary: boolean }) {
   const th = T()
   const sec = arrival.arrivalSec
-  const mins = Math.floor(sec / 60)
-  const secs = sec % 60
-  const isImmediate = sec < 60
-  const isUrgent = sec < 600
+  const hasEta = sec != null
+  const mins = hasEta ? Math.floor(sec / 60) : 0
+  const secs = hasEta ? sec % 60 : 0
+  const isImmediate = hasEta && sec < 60
+  const isUrgent = hasEta && sec < 600
 
   const mainColor = isImmediate ? th.point : isUrgent ? th.urgentColor : th.text
   const subColor = isImmediate ? th.point : isUrgent ? th.urgentColor : th.muted
@@ -361,6 +357,17 @@ function ArrivalCard({ arrival, isPrimary }: { arrival: BusArrival; isPrimary: b
         >
           곧 도착
         </span>
+      ) : !hasEta ? (
+        <div className={cn('flex items-baseline gap-0.5', !isPrimary && 'opacity-75')}>
+          <span className="font-extrabold tabular-nums"
+            style={{ fontSize: isPrimary ? '3rem' : '1.9rem', lineHeight: 1, color: th.text }}
+          >
+            {arrival.restStopCount}
+          </span>
+          <span className="font-semibold ml-1" style={{ fontSize: isPrimary ? '1.1rem' : '0.85rem', color: th.muted }}>
+            정류소 전
+          </span>
+        </div>
       ) : (
         <div className={cn('flex items-baseline gap-0.5', !isPrimary && 'opacity-75')}>
           <span className="font-extrabold tabular-nums"
@@ -385,7 +392,7 @@ function ArrivalCard({ arrival, isPrimary }: { arrival: BusArrival; isPrimary: b
       )}
 
       <div className="flex items-center gap-2 flex-wrap justify-center">
-        {arrival.restStopCount > 0 && !isImmediate && (
+        {arrival.restStopCount > 0 && !isImmediate && hasEta && (
           <span
             className="font-bold tabular-nums"
             style={{ fontSize: isPrimary ? '1rem' : '0.8rem', color: th.muted }}
@@ -396,7 +403,7 @@ function ArrivalCard({ arrival, isPrimary }: { arrival: BusArrival; isPrimary: b
         {arrival.latestStopName && (
           <div className="flex items-center gap-1 text-xs" style={{ color: th.muted }}>
             <MapPin size={10} />
-            <span className="truncate max-w-[120px]">{arrival.latestStopName}</span>
+            <span className="whitespace-nowrap">{arrival.latestStopName}</span>
           </div>
         )}
       </div>
@@ -548,8 +555,8 @@ function PromoArea({ scenario }: { scenario: PromoScenario | null }) {
   if (useScenario) {
     const block = activeBlocks[idx % activeBlocks.length]
     return (
-      <section className="shrink-0 mx-8 mb-3 rounded-2xl overflow-hidden border shadow-sm"
-        style={{ background: '#000', height: '28vh', borderColor: th.border }}
+      <section className="flex-1 min-w-0 h-full rounded-2xl overflow-hidden border shadow-sm"
+        style={{ background: '#000', borderColor: th.border }}
       >
         <div className="w-full h-full transition-opacity duration-[400ms]" style={{ opacity: visible ? 1 : 0 }}>
           {block.fileType === 'video'
@@ -563,8 +570,8 @@ function PromoArea({ scenario }: { scenario: PromoScenario | null }) {
 
   const slide = PROMO_SLIDES[idx % PROMO_SLIDES.length]
   return (
-    <section className="shrink-0 mx-8 mb-3 rounded-2xl overflow-hidden flex items-center justify-center border shadow-sm"
-      style={{ borderColor: th.border, height: '28vh' }}
+    <section className="flex-1 min-w-0 h-full rounded-2xl overflow-hidden flex items-center justify-center border shadow-sm"
+      style={{ borderColor: th.border }}
     >
       <div className="w-full h-full flex items-center justify-center px-10 transition-opacity duration-[400ms]"
         style={{ background: slide.gradient, opacity: visible ? 1 : 0 }}
@@ -575,6 +582,80 @@ function PromoArea({ scenario }: { scenario: PromoScenario | null }) {
           {slide.text}
         </p>
       </div>
+    </section>
+  )
+}
+
+// ─── CCTV (HLS Live) ──────────────────────────────────────────────────────────
+function CctvView({ url }: { url: string }) {
+  const th = T()
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const [connected, setConnected] = useState(false)
+
+  // MediaMTX 등은 /cam4/ 형태가 플레이어 페이지이므로 플레이리스트 경로로 정규화
+  const src = url.endsWith('.m3u8') ? url : url.replace(/\/?$/, '/') + 'index.m3u8'
+
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video) return
+    let hls: Hls | null = null
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
+    let cancelled = false
+
+    const start = () => {
+      if (cancelled) return
+      if (Hls.isSupported()) {
+        hls = new Hls({ liveSyncDurationCount: 2, manifestLoadingRetryDelay: 3000 })
+        hls.loadSource(src)
+        hls.attachMedia(video)
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          setConnected(true)
+          video.play().catch(() => { })
+        })
+        hls.on(Hls.Events.ERROR, (_e, data) => {
+          if (data.fatal) {
+            hls?.destroy()
+            hls = null
+            setConnected(false)
+            retryTimer = setTimeout(start, 5000)
+          }
+        })
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = src
+        setConnected(true)
+        video.play().catch(() => { })
+      }
+    }
+    start()
+    return () => {
+      cancelled = true
+      if (retryTimer) clearTimeout(retryTimer)
+      hls?.destroy()
+    }
+  }, [src])
+
+  return (
+    <section className="relative shrink-0 h-full rounded-2xl overflow-hidden border shadow-sm"
+      style={{ width: '42%', background: '#000', borderColor: th.border }}
+    >
+      <video ref={videoRef} muted playsInline className="w-full h-full object-contain" />
+      <div className="absolute top-2 left-2 flex items-center gap-1.5 px-2.5 py-1 rounded-lg"
+        style={{ background: 'rgba(0,0,0,0.55)' }}
+      >
+        <Video size={13} className="text-white shrink-0" />
+        <span className="text-xs font-bold text-white">CCTV</span>
+        {connected && (
+          <span className="flex items-center gap-1">
+            <span className="inline-flex rounded-full h-1.5 w-1.5 animate-pulse" style={{ background: '#F25C54' }} />
+            <span className="text-[10px] font-bold" style={{ color: '#F25C54' }}>LIVE</span>
+          </span>
+        )}
+      </div>
+      {!connected && (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <span className="text-sm font-medium" style={{ color: '#6B7FA8' }}>CCTV 연결 중…</span>
+        </div>
+      )}
     </section>
   )
 }
@@ -624,6 +705,7 @@ export default function Home() {
   const [tickerText, setTickerText] = useState<string | null>(null)
   const [winSize, setWinSize] = useState<{ w: number; h: number } | null>(null)
   const [showDebugOverlay, setShowDebugOverlay] = useState(false)
+  const [cctvUrl, setCctvUrl] = useState<string | null>(null)
 
   // 테마 동기화 — 렌더 전에 전역 참조 갱신
   _theme = isDark ? DARK : LIGHT
@@ -652,7 +734,10 @@ export default function Home() {
   useEffect(() => {
     fetch(`${BRIDGE_URL}/api/settings`)
       .then(r => r.json())
-      .then(json => { if (json.showDebugOverlay) setShowDebugOverlay(true) })
+      .then(json => {
+        if (json.showDebugOverlay) setShowDebugOverlay(true)
+        if (json.cctvUrl) setCctvUrl(json.cctvUrl)
+      })
       .catch(() => { })
   }, [])
 
@@ -758,7 +843,10 @@ export default function Home() {
       <SoonArriving arrivals={arrivals} />
       <ColumnLabels />
       <MainList arrivals={arrivals} serviceEnded={serviceEnded} />
-      <PromoArea scenario={promoScenario} />
+      <div className="shrink-0 flex items-stretch gap-3 mx-8 mb-3" style={{ height: '28vh' }}>
+        <PromoArea scenario={promoScenario} />
+        {cctvUrl && <CctvView url={cctvUrl} />}
+      </div>
       <FooterTicker tickerText={tickerText} />
       <LogPanel />
       {showDebugOverlay && winSize && (

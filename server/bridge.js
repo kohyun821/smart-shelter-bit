@@ -676,6 +676,70 @@ function isRouteServiceEnded(lbusDephms) {
 }
 
 /**
+ * 도착정보 API가 1대만 반환한 노선에 대해 getBusRouteLocation(위치 API)으로
+ * 같은 방향에서 접근 중인 후속 버스를 찾아 "그 다음 버스" 항목을 추가합니다.
+ * 위치 API는 도착 예정 시간이 없으므로 arrivalSec=null로 표시합니다.
+ * @param {Array} arrivals  buildArrivalData에서 만든 도착 목록 (in-place 추가)
+ * @param {Map} routeMap    ROUTEID → viaRouteCache 항목
+ */
+// 위치 API 캐시 — "그 다음 버스"는 원거리 버스라 60초 캐시로 호출량을 1/2~1/3로 절감
+const LOCATION_CACHE_TTL_MS = 60_000
+const locationCache = new Map()   // routeId → { at: number, data: Array }
+
+async function fetchLocationsCached(routeId) {
+  const hit = locationCache.get(routeId)
+  if (hit && Date.now() - hit.at < LOCATION_CACHE_TTL_MS) return hit.data
+  let data = []
+  try {
+    data = await busApi.fetchBusRouteLocation(routeId)
+  } catch {
+    // 실패도 TTL 동안 캐시해 연속 재호출 방지 (도착정보 표출에는 영향 없음)
+  }
+  locationCache.set(routeId, { at: Date.now(), data })
+  return data
+}
+
+async function appendNextBusFromLocation(arrivals, routeMap) {
+  const byRoute = new Map()
+  for (const a of arrivals) {
+    if (!byRoute.has(a.routeId)) byRoute.set(a.routeId, [])
+    byRoute.get(a.routeId).push(a)
+  }
+
+  for (const [routeId, list] of byRoute) {
+    if (list.length !== 1) continue
+    const route = routeMap.get(routeId)
+    if (!route?.BSTOPSEQ) continue
+    const myBstopSeq = parseInt(route.BSTOPSEQ)
+
+    const locations = await fetchLocationsCached(routeId)
+
+    const knownIds = new Set(list.map(a => a.id))
+    const next = locations
+      .filter(b => b.DIRCD === route.DIRCD && !knownIds.has(`${routeId}_${b.BUSID}`))
+      .map(b => ({ ...b, rest: myBstopSeq - (parseInt(b.LATEST_STOPSEQ) || 0) }))
+      .filter(b => b.rest > 0)
+      .sort((x, y) => x.rest - y.rest)[0]
+    if (!next) continue
+
+    const totalStops = route.stops?.length ?? 0
+    arrivals.push({
+      id:            `${routeId}_${next.BUSID}`,
+      routeId,
+      routeNo:       route.ROUTENO ?? routeId,
+      routeType:     route.ROUTETPCD ?? '',
+      arrivalSec:    null,   // 위치 API는 도착 예정 시간 미제공
+      restStopCount: next.rest,
+      isLowFloor:    next.LOW_TP_CD === '1',
+      isLastBus:     next.LASTBUSYN === '1',
+      currentStop:   totalStops > 0 ? Math.max(1, totalStops - next.rest) : 0,
+      totalStops,
+      latestStopName: next.LATEST_STOP_NAME || ''
+    })
+  }
+}
+
+/**
  * getAllRouteBusArrivalList 결과를 viaRouteCache와 JOIN해 프론트엔드용 객체로 변환합니다.
  * REST 엔드포인트와 SSE 폴러가 함께 사용합니다.
  * @returns {Promise<{arrivals: Array, serviceEnded: boolean}>}
@@ -706,6 +770,7 @@ async function buildArrivalData() {
 
       return {
         id:            `${a.ROUTEID}_${a.BUSID}`,
+        routeId:       a.ROUTEID,
         routeNo:       route?.ROUTENO ?? a.ROUTEID,
         routeType:     route?.ROUTETPCD ?? '',
         arrivalSec:    parseInt(a.ARRIVALESTIMATETIME) || 0,
@@ -719,6 +784,8 @@ async function buildArrivalData() {
     })
     .filter(a => a.arrivalSec < 3600)   // 60분 이상 제외
     .sort((a, b) => a.arrivalSec - b.arrivalSec)
+
+  await appendNextBusFromLocation(arrivals, routeMap)
 
   // 운행 종료 판단: 모든 노선의 막차 시각 데이터가 있고, 전부 지났으며, 운행 중 버스 없음
   const allHaveSchedule = cache.length > 0 && cache.every(r => r.lbusDephms)
@@ -734,11 +801,18 @@ async function buildArrivalData() {
 const arrivalSseClients = new Set()
 let   lastArrivalData   = null
 let   arrivalPollTimer  = null
+let   arrivalPollerRunning = false
+
+// 폴링 주기: 운행 중 30초, 운행 종료 시간대(막차 후~첫차 전)는 5분으로 감속
+const ARRIVAL_POLL_MS      = 30_000
+const ARRIVAL_POLL_IDLE_MS = 5 * 60_000
 
 async function pollAndBroadcast() {
+  let serviceEndedNow = false
   try {
     const { arrivals, serviceEnded } = await buildArrivalData()
     lastArrivalData = { arrivals, serviceEnded }
+    serviceEndedNow = serviceEnded
 
     const chunk = `event: arrivals\ndata: ${JSON.stringify({ arrivals, serviceEnded })}\n\n`
     for (const res of arrivalSseClients) {
@@ -747,17 +821,26 @@ async function pollAndBroadcast() {
   } catch (err) {
     console.warn('[Bridge][Arrivals] 폴링 실패:', err.message)
   }
+  return serviceEndedNow
+}
+
+async function pollLoop() {
+  const serviceEnded = await pollAndBroadcast()
+  if (!arrivalPollerRunning) return
+  const delay = serviceEnded ? ARRIVAL_POLL_IDLE_MS : ARRIVAL_POLL_MS
+  arrivalPollTimer = setTimeout(pollLoop, delay)
 }
 
 function startArrivalPoller() {
-  pollAndBroadcast()  // 즉시 1회 실행
-  arrivalPollTimer = setInterval(pollAndBroadcast, 20_000)
-  console.log('[Bridge][Arrivals] 실시간 폴링 시작 (20초 주기)')
+  arrivalPollerRunning = true
+  pollLoop()
+  console.log(`[Bridge][Arrivals] 실시간 폴링 시작 (운행 중 ${ARRIVAL_POLL_MS / 1000}초 / 운행 종료 ${ARRIVAL_POLL_IDLE_MS / 60000}분 주기)`)
 }
 
 function stopArrivalPoller() {
+  arrivalPollerRunning = false
   if (arrivalPollTimer) {
-    clearInterval(arrivalPollTimer)
+    clearTimeout(arrivalPollTimer)
     arrivalPollTimer = null
   }
 }
@@ -856,7 +939,7 @@ app.get('/api/bus/arrivals', async (_req, res) => {
 
 /**
  * GET /api/bus/arrivals/stream
- * 연결 즉시 마지막 데이터를 전송하고, 이후 20초마다 갱신 데이터를 푸시합니다.
+ * 연결 즉시 마지막 데이터를 전송하고, 이후 폴링 주기(운행 중 30초)마다 갱신 데이터를 푸시합니다.
  */
 app.get('/api/bus/arrivals/stream', (req, res) => {
   res.set({
@@ -951,9 +1034,10 @@ app.get('/api/settings', (_req, res) => {
     const cfg = Array.isArray(json) && json.length > 0 ? json[0] : {}
     res.json({
       showDebugOverlay: typeof cfg.showDebugOverlay === 'boolean' ? cfg.showDebugOverlay : false,
+      cctvUrl: typeof cfg.cctv_url === 'string' && cfg.cctv_url.length > 0 ? cfg.cctv_url : null,
     })
   } catch (e) {
-    res.json({ showDebugOverlay: false })
+    res.json({ showDebugOverlay: false, cctvUrl: null })
   }
 })
 
