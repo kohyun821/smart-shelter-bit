@@ -52,6 +52,11 @@ const DEFAULTS = {
     baseUrl: 'http://localhost:8080',  // 구형 미니PC HTTP 서버 주소
     timeout: 10000,                    // 요청 타임아웃 (ms)
   },
+  logging: {
+    enableFile: false,   // true 시 data/logs/ 에 날짜별 로그 파일 저장
+    maxSizeMb: 10,       // 파일 크기 초과 시 rotate (MB)
+    keepDays: 7,         // N일 이전 로그 파일 자동 삭제
+  },
 }
 
 /**
@@ -92,6 +97,9 @@ function loadSettings() {
       if (parsed.legacyServer) {
         raw.legacyServer = { ...DEFAULTS.legacyServer, ...parsed.legacyServer }
       }
+      if (parsed.logging) {
+        raw.logging = { ...DEFAULTS.logging, ...parsed.logging }
+      }
     }
   } catch (err) {
     console.warn('[Settings] Could not load config/settings.json:', err.message)
@@ -116,6 +124,7 @@ function loadSettings() {
     legacyServer: { ...raw.legacyServer },
     wsBaseUrl,  // ws://host:port (stationId 경로 미포함)
     wsUrl,      // 환경변수 BRIDGE_WS_URL 우선 적용 시 사용
+    logging: { ...raw.logging },
   }
 }
 

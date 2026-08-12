@@ -59,31 +59,52 @@ function loadBusStopId() {
   throw new Error('[BusApi] bus_stop_id가 data/setting.json에 없습니다')
 }
 
-// ─── XML 파싱 (lib/api/bus.ts는 raw string 반환 → 여기서 구조화) ──────────────
+// ─── 응답 파싱 (JSON + XML 겸용) ──────────────────────────────────────────────
 
 /**
- * XML에서 단일 태그 값을 추출합니다.
- * @param {string} xml
- * @param {string} tag
- * @returns {string}
+ * 인천 버스 API XML 응답 → parseJson이 기대하는 JSON 구조로 변환.
+ * 이 API는 dataType=JSON을 지정해도 XML로 응답하는 경우가 있음.
  */
-function extractTag(xml, tag) {
-  const m = xml.match(new RegExp(`<${tag}[^>]*>([^<]*)<\\/${tag}>`))
-  return m ? m[1].trim() : ''
+function _xmlToApiJson(xml) {
+  const tag = (name) => {
+    const m = xml.match(new RegExp(`<${name}>([\\s\\S]*?)<\\/${name}>`))
+    return m ? m[1].trim() : ''
+  }
+  const resultCode = tag('resultCode')
+  const resultMsg  = tag('resultMsg')
+
+  const chunks = [...xml.matchAll(/<itemList>([\s\S]*?)<\/itemList>/g)]
+  const items = chunks.map(c => {
+    const item = {}
+    for (const [, k, v] of c[1].matchAll(/<(\w+)>([\s\S]*?)<\/\1>/g)) {
+      item[k] = v.trim()
+    }
+    return item
+  })
+
+  return {
+    msgHeader: { resultCode, resultMsg },
+    msgBody: {
+      itemList: items.length === 0 ? null
+              : items.length === 1 ? items[0]
+              : items,
+    },
+  }
 }
 
 /**
- * XML에서 <itemList>...</itemList> 블록을 배열로 추출합니다.
- * @param {string} xml
- * @returns {string[]}
+ * fetch 응답을 JSON 또는 XML로 자동 파싱하여 공통 구조 반환.
  */
-function extractItemLists(xml) {
-  const blocks = []
-  const re = /<itemList>([\s\S]*?)<\/itemList>/g
-  let m
-  while ((m = re.exec(xml)) !== null) blocks.push(m[1])
-  return blocks
+async function fetchApiJson(response) {
+  const text = await response.text()
+  const trimmed = text.trimStart()
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    return JSON.parse(text)
+  }
+  return _xmlToApiJson(text)
 }
+
+// ─── JSON 파싱 ───────────────────────────────────────────────────────────────
 
 const ROUTE_FIELDS = [
   'BSTOPID', 'BSTOPNM', 'ROUTEID', 'ROUTENO',
@@ -95,24 +116,32 @@ const SECTION_FIELDS = ['BSTOPID', 'BSTOPNM', 'PATHSEQ', 'BSTOPSEQ', 'DIRCD']
 
 const ROUTE_ID_FIELDS = ['ROUTEID', 'ROUTENO', 'FBUS_DEPHMS', 'LBUS_DEPHMS']
 
-function parseXml(xml, fields) {
-  const resultCode = extractTag(xml, 'resultCode')
-  if (resultCode !== '0') {
-    const resultMsg = extractTag(xml, 'resultMsg')
-    throw new Error(`API 오류 (code=${resultCode}): ${resultMsg}`)
+/**
+ * 인천 버스 API JSON 응답 파싱.
+ * 성공: msgHeader.resultCode === '0'
+ * 아이템: msgBody.itemList — 복수이면 배열, 단건이면 객체로 옴
+ */
+function parseJson(json, fields) {
+  const resultCode = json?.msgHeader?.resultCode
+  if (resultCode && resultCode !== '0') {
+    throw new Error(`API 오류 (code=${resultCode}): ${json?.msgHeader?.resultMsg ?? ''}`)
   }
-  return extractItemLists(xml).map(block => {
+
+  const raw = json?.msgBody?.itemList
+  if (raw == null) return []
+  const items = Array.isArray(raw) ? raw : [raw]
+
+  return items.map(item => {
     const obj = {}
-    for (const field of fields) obj[field] = extractTag(block, field)
+    for (const field of fields) obj[field] = item[field] ?? ''
     return obj
   })
 }
 
-// ─── API 호출 (lib/api/bus.ts의 getBusStationViaRouteList와 동일한 URL 구성) ──
+// ─── API 호출 ─────────────────────────────────────────────────────────────────
 
 /**
- * 정류소 경유 노선 목록 조회 — lib/api/bus.ts의 getBusStationViaRouteList에 대응.
- * lib/api/bus.ts는 raw XML string을 반환하지만, 여기서는 파싱 후 배열로 반환합니다.
+ * 정류소 경유 노선 목록 조회
  * @param {string} bstopId
  * @param {number} pageNo
  * @param {number} numOfRows
@@ -120,13 +149,12 @@ function parseXml(xml, fields) {
  */
 async function getBusStationViaRouteList(bstopId, pageNo = 1, numOfRows = 100) {
   const serviceKey = getServiceKey()
-  const url = `${BASE_STATION_URL}/getBusStationViaRouteList?serviceKey=${serviceKey}&bstopId=${bstopId}&pageNo=${pageNo}&numOfRows=${numOfRows}`
+  const url = `${BASE_STATION_URL}/getBusStationViaRouteList?serviceKey=${serviceKey}&bstopId=${bstopId}&pageNo=${pageNo}&numOfRows=${numOfRows}&dataType=JSON`
 
   const response = await fetch(url)
   if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
 
-  const xml = await response.text()
-  const routes = parseXml(xml, ROUTE_FIELDS)
+  const routes = parseJson(await fetchApiJson(response), ROUTE_FIELDS)
 
   console.log(`[BusApi] ✔ 경유 노선 ${routes.length}개: ${routes.map(r => r.ROUTENO).join(', ')}`)
 
@@ -145,18 +173,15 @@ async function getBusStationViaRouteList(bstopId, pageNo = 1, numOfRows = 100) {
  */
 async function getBusRouteSectionList(routeId, myBstopSeq, numOfRows = 500) {
   const serviceKey = getServiceKey()
-  const url = `${BASE_ROUTE_URL}/getBusRouteSectionList?serviceKey=${serviceKey}&routeId=${routeId}&pageNo=1&numOfRows=${numOfRows}`
+  const url = `${BASE_ROUTE_URL}/getBusRouteSectionList?serviceKey=${serviceKey}&routeId=${routeId}&pageNo=1&numOfRows=${numOfRows}&dataType=JSON`
 
   const response = await fetch(url)
   if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
 
-  const xml = await response.text()
-  const allStops = parseXml(xml, SECTION_FIELDS)
+  const allStops = parseJson(await fetchApiJson(response), SECTION_FIELDS)
 
   // 내 정류소(BSTOPSEQ) 이하만 보존
-  const stops = allStops.filter(s => parseInt(s.BSTOPSEQ) <= myBstopSeq)
-
-  return stops
+  return allStops.filter(s => parseInt(s.BSTOPSEQ) <= myBstopSeq)
 }
 
 // ─── getBusRouteId ────────────────────────────────────────────────────────────
@@ -168,13 +193,12 @@ async function getBusRouteSectionList(routeId, myBstopSeq, numOfRows = 500) {
  */
 async function getBusRouteId(routeId) {
   const serviceKey = getServiceKey()
-  const url = `${BASE_ROUTE_URL}/getBusRouteId?serviceKey=${serviceKey}&routeId=${routeId}&pageNo=1&numOfRows=1`
+  const url = `${BASE_ROUTE_URL}/getBusRouteId?serviceKey=${serviceKey}&routeId=${routeId}&pageNo=1&numOfRows=1&dataType=JSON`
 
   const response = await fetch(url)
   if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
 
-  const xml = await response.text()
-  const items = parseXml(xml, ROUTE_ID_FIELDS)
+  const items = parseJson(await fetchApiJson(response), ROUTE_ID_FIELDS)
   return items[0] ?? null
 }
 
@@ -188,13 +212,12 @@ async function getBusRouteId(routeId) {
  */
 async function getBusStationIdList(bstopId) {
   const serviceKey = getServiceKey()
-  const url = `${BASE_STATION_URL}/getBusStationIdList?serviceKey=${serviceKey}&bstopId=${bstopId}&pageNo=1&numOfRows=1`
+  const url = `${BASE_STATION_URL}/getBusStationIdList?serviceKey=${serviceKey}&bstopId=${bstopId}&pageNo=1&numOfRows=1&dataType=JSON`
 
   const response = await fetch(url)
   if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
 
-  const xml = await response.text()
-  const items = parseXml(xml, NM_LIST_FIELDS)
+  const items = parseJson(await fetchApiJson(response), NM_LIST_FIELDS)
   return items[0] ?? null
 }
 
@@ -210,13 +233,12 @@ const NM_LIST_FIELDS = ['BSTOPID', 'BSTOPNM', 'SHORT_BSTOPID']
  */
 async function getBusStationNmList(bstopNm, numOfRows = 255) {
   const serviceKey = getServiceKey()
-  const url = `${BASE_STATION_URL}/getBusStationNmList?serviceKey=${serviceKey}&bstopNm=${encodeURIComponent(bstopNm)}&pageNo=1&numOfRows=${numOfRows}`
+  const url = `${BASE_STATION_URL}/getBusStationNmList?serviceKey=${serviceKey}&bstopNm=${encodeURIComponent(bstopNm)}&pageNo=1&numOfRows=${numOfRows}&dataType=JSON`
 
   const response = await fetch(url)
   if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
 
-  const xml = await response.text()
-  return parseXml(xml, NM_LIST_FIELDS)
+  return parseJson(await fetchApiJson(response), NM_LIST_FIELDS)
 }
 
 // ─── getAllRouteBusArrivalList ────────────────────────────────────────────────
@@ -233,13 +255,12 @@ const ARRIVAL_FIELDS = [
  */
 async function fetchAllRouteBusArrivalList(bstopId) {
   const serviceKey = getServiceKey()
-  const url = `${BASE_ARRIVAL_URL}/getAllRouteBusArrivalList?serviceKey=${serviceKey}&bstopId=${bstopId}&pageNo=1&numOfRows=100`
+  const url = `${BASE_ARRIVAL_URL}/getAllRouteBusArrivalList?serviceKey=${serviceKey}&bstopId=${bstopId}&pageNo=1&numOfRows=100&dataType=JSON`
 
   const response = await fetch(url)
   if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
 
-  const xml = await response.text()
-  return parseXml(xml, ARRIVAL_FIELDS)
+  return parseJson(await fetchApiJson(response), ARRIVAL_FIELDS)
 }
 
 // ─── getBusRouteLocation ──────────────────────────────────────────────────────
@@ -258,13 +279,12 @@ const LOCATION_FIELDS = [
  */
 async function fetchBusRouteLocation(routeId) {
   const serviceKey = getServiceKey()
-  const url = `${BASE_LOCATION_URL}/getBusRouteLocation?serviceKey=${serviceKey}&routeId=${routeId}&pageNo=1&numOfRows=255`
+  const url = `${BASE_LOCATION_URL}/getBusRouteLocation?serviceKey=${serviceKey}&routeId=${routeId}&pageNo=1&numOfRows=255&dataType=JSON`
 
   const response = await fetch(url)
   if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
 
-  const xml = await response.text()
-  return parseXml(xml, LOCATION_FIELDS)
+  return parseJson(await fetchApiJson(response), LOCATION_FIELDS)
 }
 
 /**

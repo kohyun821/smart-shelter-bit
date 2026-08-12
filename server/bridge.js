@@ -1,7 +1,7 @@
 'use strict'
 
 // logger를 가장 먼저 로드해야 이후 console 출력이 모두 캡처됩니다.
-const { registerSseClient, unregisterSseClient } = require('./logger')
+const { registerSseClient, unregisterSseClient, initFileLogging } = require('./logger')
 
 const express = require('express')
 const http = require('http')
@@ -11,6 +11,7 @@ const EventEmitter = require('events')
 const { loadSettings } = require('./loadSettings')
 const busApi = require('./busApi')
 const weatherApi = require('./weatherApi')
+const airQualityApi = require('./airQualityApi')
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -44,6 +45,9 @@ function getDataDir() {
   } catch {}
   return require('path').join(__dirname, '..', 'data')
 }
+
+// 파일 로그 활성화 (settings.logging.enableFile === true 일 때만 data/logs/ 에 저장)
+initFileLogging(settings.logging, getDataDir())
 
 /**
  * data/setting.json에서 shelter_id를 읽어 반환합니다.
@@ -723,6 +727,11 @@ async function appendNextBusFromLocation(arrivals, routeMap) {
     if (!next) continue
 
     const totalStops = route.stops?.length ?? 0
+    const stops = route.stops || []
+    const viaStopsText = stops.length > 1
+      ? stops.slice(Math.max(0, stops.length - 3), stops.length - 1).map(s => s.BSTOPNM).join(' · ')
+      : ''
+
     arrivals.push({
       id:            `${routeId}_${next.BUSID}`,
       routeId,
@@ -734,7 +743,9 @@ async function appendNextBusFromLocation(arrivals, routeMap) {
       isLastBus:     next.LASTBUSYN === '1',
       currentStop:   totalStops > 0 ? Math.max(1, totalStops - next.rest) : 0,
       totalStops,
-      latestStopName: next.LATEST_STOP_NAME || ''
+      latestStopName: next.LATEST_STOP_NAME || '',
+      destination:   route.DESTINATION || '',
+      viaStopsText
     })
   }
 }
@@ -768,6 +779,11 @@ async function buildArrivalData() {
       const restStops   = parseInt(a.REST_STOP_COUNT) || 0
       const currentStop = totalStops > 0 ? Math.max(1, totalStops - restStops) : 0
 
+      const stops = route?.stops || []
+      const viaStopsText = stops.length > 1
+        ? stops.slice(Math.max(0, stops.length - 3), stops.length - 1).map(s => s.BSTOPNM).join(' · ')
+        : ''
+
       return {
         id:            `${a.ROUTEID}_${a.BUSID}`,
         routeId:       a.ROUTEID,
@@ -779,7 +795,9 @@ async function buildArrivalData() {
         isLastBus:     a.LASTBUSYN === '1',
         currentStop,
         totalStops,
-        latestStopName: a.LATEST_STOP_NAME || ''
+        latestStopName: a.LATEST_STOP_NAME || '',
+        destination:   route?.DESTINATION || '',
+        viaStopsText
       }
     })
     .filter(a => a.arrivalSec < 3600)   // 60분 이상 제외
@@ -853,7 +871,7 @@ let weatherPollTimer = null
 async function pollWeather() {
   try {
     weatherCache = await weatherApi.fetchWeather()
-    console.log(`[Bridge][Weather] 업데이트: 현재 ${weatherCache.temp}°C, 최저 ${weatherCache.minTemp}°C, 최고 ${weatherCache.maxTemp}°C, SKY=${weatherCache.sky}, PTY=${weatherCache.pty}`)
+    console.log(`[Bridge][Weather] 업데이트: 현재 ${weatherCache.temp}°C, SKY=${weatherCache.sky}, PTY=${weatherCache.pty}`)
   } catch (err) {
     console.warn('[Bridge][Weather] 날씨 조회 실패:', err.message)
   }
@@ -869,6 +887,33 @@ function stopWeatherPoller() {
   if (weatherPollTimer) {
     clearInterval(weatherPollTimer)
     weatherPollTimer = null
+  }
+}
+
+// ── 대기질 캐시 및 폴러 ────────────────────────────────────────────────────────
+
+let airQualityCache = null
+let airQualityPollTimer = null
+
+async function pollAirQuality() {
+  try {
+    const data = await airQualityApi.fetchAirQuality()
+    if (data) airQualityCache = data
+  } catch (err) {
+    console.warn('[Bridge][AirQuality] 대기질 조회 실패:', err.message)
+  }
+}
+
+function startAirQualityPoller() {
+  pollAirQuality()
+  airQualityPollTimer = setInterval(pollAirQuality, 30 * 60 * 1000) // 30분 주기
+  console.log('[Bridge][AirQuality] 대기질 폴링 시작 (30분 주기)')
+}
+
+function stopAirQualityPoller() {
+  if (airQualityPollTimer) {
+    clearInterval(airQualityPollTimer)
+    airQualityPollTimer = null
   }
 }
 
@@ -1054,6 +1099,17 @@ app.get('/api/weather', (_req, res) => {
   res.json({ resultCd: '200', resultMsg: 'Success', data: weatherCache })
 })
 
+/**
+ * GET /api/air-quality
+ * 에어코리아 실시간 대기질 정보 (PM10, PM2.5, O3)
+ */
+app.get('/api/air-quality', (_req, res) => {
+  if (!airQualityCache) {
+    return res.status(503).json({ resultCd: '503', resultMsg: '대기질 데이터 준비 중', data: null })
+  }
+  res.json({ resultCd: '200', resultMsg: 'Success', data: airQualityCache })
+})
+
 // ── 홍보 시나리오 ─────────────────────────────────────────────────────────────
 
 /**
@@ -1160,8 +1216,9 @@ async function start({ connectWebSocket = true } = {}) {
     console.log(`[Bridge] Listening on http://localhost:${HTTP_PORT}`)
   })
 
-  // 날씨는 버스 초기화와 독립적으로 즉시 시작
+  // 날씨·대기질은 버스 초기화와 독립적으로 즉시 시작
   startWeatherPoller()
+  startAirQualityPoller()
 
   await busApi.initBusRoutesAndStops()
   startArrivalPoller()
@@ -1188,6 +1245,7 @@ function stop() {
   stopStatusUpdateTimer()
   stopArrivalPoller()
   stopWeatherPoller()
+  stopAirQualityPoller()
 
   if (wsClient) {
     wsClient.removeAllListeners()

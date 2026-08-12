@@ -1,4 +1,4 @@
-const { app, BrowserWindow, protocol } = require('electron')
+const { app, BrowserWindow, protocol, screen } = require('electron')
 const path = require('path')
 const fs = require('fs')
 require('dotenv').config()
@@ -40,9 +40,22 @@ function getWindowSettings() {
 function createWindow() {
   const winSettings = getWindowSettings()
 
+  // 설계 해상도 (1080×1920)
+  const DESIGN_W = winSettings.width
+  const DESIGN_H = winSettings.height
+
+  // 실제 화면 크기로 배율 계산
+  const display = screen.getPrimaryDisplay()
+  const { width: screenW, height: screenH } = winSettings.hideTaskbar
+    ? display.bounds       // 키오스크: 작업표시줄 포함 전체
+    : display.workAreaSize // 일반: 작업표시줄 제외
+  const scale = Math.min(screenW / DESIGN_W, screenH / DESIGN_H)
+  const actualW = Math.round(DESIGN_W * scale)
+  const actualH = Math.round(DESIGN_H * scale)
+
   const mainWindow = new BrowserWindow({
-    width: winSettings.width,
-    height: winSettings.height,
+    width: actualW,
+    height: actualH,
     x: 0,
     y: 0,
     alwaysOnTop: winSettings.alwaysOnTop,
@@ -52,6 +65,7 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
+      zoomFactor: scale,  // 초기 배율 적용 (페이지 로드 전)
     },
     show: false,
   })
