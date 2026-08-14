@@ -550,8 +550,8 @@ function BusRow({ arrival }: { arrival: BusArrival }) {
       )}
 
       {/* 왼쪽: 버스 번호 */}
-      <div className="flex items-center gap-4" style={{ width: '210px', flexShrink: 0 }}>
-        <img src="/bus-icon.png" alt="" width={36} height={48} className="shrink-0 object-contain" style={{ filter: isTownBus ? 'hue-rotate(30deg) saturate(1.3)' : 'none' }} />
+      <div className="flex items-center gap-2" style={{ width: '210px', flexShrink: 0 }}>
+        <img src="/bus-icon.png" alt="" width={44} height={58} className="shrink-0 object-contain" style={{ filter: isTownBus ? 'hue-rotate(30deg) saturate(1.3)' : 'none' }} />
         <span
           className="font-bold tracking-tighter"
           style={{ fontSize: '50px', color: routeColor, lineHeight: '50px' }}
