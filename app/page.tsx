@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import Hls from 'hls.js'
@@ -251,43 +251,43 @@ function BitHeader({ now, weather, airQuality }: {
       {/* 가운데: 대기 상태 정보 */}
       <div className="flex items-center justify-center gap-12">
         {/* 미세먼지 (PM10) */}
-        <div className="flex flex-col items-center">
+        <div className="flex flex-col items-center justify-between" style={{ height: '76px' }}>
           <span style={{ fontSize: '19px', fontWeight: 500, color: th.text }}>미세먼지</span>
-          <div className="flex items-center gap-1.5 mt-1">
+          <div className="flex items-center gap-1.5">
             <span className="w-[18px] h-[18px] rounded-full inline-block" style={{ background: airQuality?.pm10GradeColor ?? '#9E9E9E' }} />
             <span style={{ fontSize: '24px', fontWeight: 600, color: airQuality ? th.text : th.muted }}>
               {airQuality?.pm10GradeText ?? '정보없음'}
             </span>
           </div>
-          <span className="mt-1" style={{ fontSize: '13px', fontWeight: 500, color: th.muted }}>
+          <span style={{ fontSize: '13px', fontWeight: 500, color: th.muted }}>
             {airQuality?.pm10Value != null ? `${airQuality.pm10Value}㎍/㎥` : '\u00A0'}
           </span>
         </div>
 
         {/* 초미세먼지 (PM2.5) */}
-        <div className="flex flex-col items-center">
+        <div className="flex flex-col items-center justify-between" style={{ height: '76px' }}>
           <span style={{ fontSize: '19px', fontWeight: 500, color: th.text }}>초미세먼지</span>
-          <div className="flex items-center gap-1.5 mt-1">
+          <div className="flex items-center gap-1.5">
             <span className="w-[18px] h-[18px] rounded-full inline-block" style={{ background: airQuality?.pm25GradeColor ?? '#9E9E9E' }} />
             <span style={{ fontSize: '24px', fontWeight: 600, color: airQuality ? th.text : th.muted }}>
               {airQuality?.pm25GradeText ?? '정보없음'}
             </span>
           </div>
-          <span className="mt-1" style={{ fontSize: '13px', fontWeight: 500, color: th.muted }}>
+          <span style={{ fontSize: '13px', fontWeight: 500, color: th.muted }}>
             {airQuality?.pm25Value != null ? `${airQuality.pm25Value}㎍/㎥` : '\u00A0'}
           </span>
         </div>
 
         {/* 오존지수 (O3) */}
-        <div className="flex flex-col items-center">
+        <div className="flex flex-col items-center justify-between" style={{ height: '76px' }}>
           <span style={{ fontSize: '19px', fontWeight: 500, color: th.text }}>오존지수</span>
-          <div className="flex items-center gap-1.5 mt-1">
+          <div className="flex items-center gap-1.5">
             <span className="w-[18px] h-[18px] rounded-full inline-block" style={{ background: airQuality?.o3GradeColor ?? '#9E9E9E' }} />
             <span style={{ fontSize: '24px', fontWeight: 600, color: airQuality ? th.text : th.muted }}>
               {airQuality?.o3GradeText ?? '정보없음'}
             </span>
           </div>
-          <span className="mt-1" style={{ fontSize: '13px', fontWeight: 500, color: th.muted }}>
+          <span style={{ fontSize: '13px', fontWeight: 500, color: th.muted }}>
             {airQuality?.o3Value != null ? `${airQuality.o3Value}ppm` : '\u00A0'}
           </span>
         </div>
@@ -296,20 +296,20 @@ function BitHeader({ now, weather, airQuality }: {
       {/* 오른쪽: 날씨 + 날짜 + 시간 */}
       <div className="flex items-center gap-8">
         {weather != null && (
-          <div className="flex items-center gap-3">
-            <span style={{ color: th.text, transform: 'scale(1.5)', display: 'inline-block' }}>
-              <WeatherIcon sky={weather.sky} pty={weather.pty} size={28} />
-            </span>
-            <span className="font-semibold tabular-nums" style={{ fontSize: '30px', color: th.text }}>
-              {weather.temp != null ? `${Math.round(weather.temp)}°C` : ''}
+          <div className="flex flex-col items-center justify-between" style={{ height: '76px' }}>
+            <span style={{ fontSize: '19px', fontWeight: 500, color: th.text }}>날씨</span>
+            <WeatherIcon sky={weather.sky} pty={weather.pty} size={36} />
+            <span className="font-semibold tabular-nums" style={{ fontSize: '20px', color: th.text }}>
+              {weather.temp != null ? `${Math.round(weather.temp)}°C` : ' '}
             </span>
           </div>
         )}
-        <div className="flex flex-col items-end">
+        <div className="flex flex-col items-end justify-between" style={{ height: '76px' }}>
           <span style={{ fontSize: '19px', fontWeight: 500, color: th.text }}>{dateStr}</span>
-          <span className="font-bold tabular-nums" style={{ fontSize: '55px', lineHeight: '50px', letterSpacing: '0.05em', color: th.text, marginTop: '2px' }}>
+          <span className="font-bold tabular-nums" style={{ fontSize: '46px', lineHeight: '1', letterSpacing: '0.05em', color: th.text }}>
             {h}:{m}
           </span>
+          <span style={{ fontSize: '13px', color: 'transparent' }}>&nbsp;</span>
         </div>
       </div>
     </header>
@@ -550,8 +550,8 @@ function BusRow({ arrival }: { arrival: BusArrival }) {
       )}
 
       {/* 왼쪽: 버스 번호 */}
-      <div className="flex items-center gap-4">
-        <img src="/bus-icon.png" alt="" width={27} height={36} className="shrink-0 object-contain" style={{ filter: isTownBus ? 'hue-rotate(30deg) saturate(1.3)' : 'none' }} />
+      <div className="flex items-center gap-4" style={{ width: '210px', flexShrink: 0 }}>
+        <img src="/bus-icon.png" alt="" width={36} height={48} className="shrink-0 object-contain" style={{ filter: isTownBus ? 'hue-rotate(30deg) saturate(1.3)' : 'none' }} />
         <span
           className="font-bold tracking-tighter"
           style={{ fontSize: '50px', color: routeColor, lineHeight: '50px' }}
@@ -611,7 +611,7 @@ function BusRow({ arrival }: { arrival: BusArrival }) {
             </span>
             <span
               className="font-semibold"
-              style={{ fontSize: '25px', color: th.muted, letterSpacing: '0.05em' }}
+              style={{ fontSize: '20px', color: th.muted, letterSpacing: '0.05em' }}
             >
               {arrival.restStopCount}정류장 전
             </span>
@@ -626,7 +626,7 @@ function BusRow({ arrival }: { arrival: BusArrival }) {
             </span>
             <span
               className="font-medium"
-              style={{ fontSize: '20px', color: th.muted, letterSpacing: '0.05em', lineHeight: '20px' }}
+              style={{ fontSize: '16px', color: th.muted, letterSpacing: '0.05em', lineHeight: '20px' }}
             >
               {hasEta ? `${arrival.restStopCount}정류장 전` : '정보없음'}
             </span>
@@ -712,15 +712,6 @@ function MainList({ arrivals, serviceEnded }: { arrivals: BusArrival[]; serviceE
         ))}
       </div>
 
-      {totalPages > 1 && (
-        <div className="absolute bottom-4 right-8 flex gap-1.5 z-10">
-          {Array.from({ length: totalPages }).map((_, i) => (
-            <div key={i} className="w-2.5 h-2.5 rounded-full transition-colors"
-              style={{ background: i === page ? '#165CFD' : '#EBEDF3' }}
-            />
-          ))}
-        </div>
-      )}
     </section>
   )
 }
