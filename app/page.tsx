@@ -1006,8 +1006,8 @@ export default function Home() {
 
       {/* 2. Stop Title Row (정류소 정보: Map Pin + 정류소명 + 방면 및 단축 ID) */}
       <div className="flex items-center shrink-0 w-full animate-fade-in" style={{ padding: '24px 40px', gap: '16px' }}>
-        <MapPin size={32} className="text-[#165CFD] shrink-0" style={{ fill: 'rgba(22, 92, 253, 0.1)' }} />
-        <span className="font-bold tracking-tight" style={{ fontSize: '46px', color: '#25304E', lineHeight: '50px' }}>
+        <MapPin size={44} className="text-[#165CFD] shrink-0" style={{ fill: 'rgba(22, 92, 253, 0.1)' }} />
+        <span className="font-bold tracking-tight" style={{ fontSize: '54px', color: '#25304E', lineHeight: '60px' }}>
           {stopName ?? '강화군청'}
         </span>
         <span className="font-semibold" style={{ fontSize: '24px', color: '#7B8494', lineHeight: '50px', marginLeft: '12px' }}>
