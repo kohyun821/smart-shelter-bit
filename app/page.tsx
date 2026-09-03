@@ -162,6 +162,17 @@ function toSinoKorean(numStr: string): string {
   return r + numStr.replace(/^\d+/, '')
 }
 
+// 개발용 날씨 아이콘 테스트 상태 (W 키로 순환) — 실제 API 없이 모든 아이콘 확인용
+const WEATHER_TEST_STATES: { label: string; data: WeatherData }[] = [
+  { label: '맑음', data: { temp: 18, sky: 1, pty: 0 } },
+  { label: '구름많음', data: { temp: 18, sky: 3, pty: 0 } },
+  { label: '흐림', data: { temp: 18, sky: 4, pty: 0 } },
+  { label: '비', data: { temp: 18, sky: 1, pty: 1 } },
+  { label: '비/눈', data: { temp: 18, sky: 1, pty: 2 } },
+  { label: '눈', data: { temp: 18, sky: 1, pty: 3 } },
+  { label: '소나기', data: { temp: 18, sky: 1, pty: 4 } },
+]
+
 function isSoonArriving(a: BusArrival) {
   return (a.arrivalSec ?? Infinity) <= 239 || a.restStopCount <= 2
 }
@@ -248,10 +259,8 @@ function BitHeader({ now, weather, airQuality }: {
         </span>
       </div>
 
-      {/* 가운데: 대기 상태 정보 */}
-      <div className="flex items-center justify-center gap-12">
-        {/* 미세먼지 (PM10) */}
-        <div className="flex flex-col items-center justify-between" style={{ height: '76px' }}>
+      {/* 미세먼지 (PM10) */}
+        <div className="flex flex-col items-start justify-between" style={{ height: '90px' }}>
           <span style={{ fontSize: '19px', fontWeight: 500, color: th.text }}>미세먼지</span>
           <div className="flex items-center gap-1.5">
             <span className="w-[18px] h-[18px] rounded-full inline-block" style={{ background: airQuality?.pm10GradeColor ?? '#9E9E9E' }} />
@@ -265,7 +274,7 @@ function BitHeader({ now, weather, airQuality }: {
         </div>
 
         {/* 초미세먼지 (PM2.5) */}
-        <div className="flex flex-col items-center justify-between" style={{ height: '76px' }}>
+        <div className="flex flex-col items-start justify-between" style={{ height: '90px' }}>
           <span style={{ fontSize: '19px', fontWeight: 500, color: th.text }}>초미세먼지</span>
           <div className="flex items-center gap-1.5">
             <span className="w-[18px] h-[18px] rounded-full inline-block" style={{ background: airQuality?.pm25GradeColor ?? '#9E9E9E' }} />
@@ -279,7 +288,7 @@ function BitHeader({ now, weather, airQuality }: {
         </div>
 
         {/* 오존지수 (O3) */}
-        <div className="flex flex-col items-center justify-between" style={{ height: '76px' }}>
+        <div className="flex flex-col items-start justify-between" style={{ height: '90px' }}>
           <span style={{ fontSize: '19px', fontWeight: 500, color: th.text }}>오존지수</span>
           <div className="flex items-center gap-1.5">
             <span className="w-[18px] h-[18px] rounded-full inline-block" style={{ background: airQuality?.o3GradeColor ?? '#9E9E9E' }} />
@@ -291,27 +300,24 @@ function BitHeader({ now, weather, airQuality }: {
             {airQuality?.o3Value != null ? `${airQuality.o3Value}ppm` : '\u00A0'}
           </span>
         </div>
-      </div>
 
-      {/* 오른쪽: 날씨 + 날짜 + 시간 */}
-      <div className="flex items-center gap-8">
+        {/* 날씨 */}
         {weather != null && (
-          <div className="flex flex-col items-center justify-between" style={{ height: '76px' }}>
-            <span style={{ fontSize: '19px', fontWeight: 500, color: th.text }}>날씨</span>
-            <WeatherIcon sky={weather.sky} pty={weather.pty} size={36} />
-            <span className="font-semibold tabular-nums" style={{ fontSize: '20px', color: th.text }}>
+          <div className="flex items-center gap-2" style={{ height: '90px' }}>
+            <WeatherIcon sky={weather.sky} pty={weather.pty} size={40} />
+            <span className="font-semibold tabular-nums" style={{ fontSize: '24px', color: th.text }}>
               {weather.temp != null ? `${Math.round(weather.temp)}°C` : ' '}
             </span>
           </div>
         )}
-        <div className="flex flex-col items-end justify-between" style={{ height: '76px' }}>
-          <span style={{ fontSize: '19px', fontWeight: 500, color: th.text }}>{dateStr}</span>
-          <span className="font-bold tabular-nums" style={{ fontSize: '46px', lineHeight: '1', letterSpacing: '0.05em', color: th.text }}>
+
+        {/* 날짜 + 시간 */}
+        <div className="flex flex-col items-stretch justify-between" style={{ height: '90px', width: '176px' }}>
+          <span style={{ fontSize: '19px', fontWeight: 500, color: th.text, textAlign: 'center', letterSpacing: '0.1em' }}>{dateStr}</span>
+          <span className="font-bold tabular-nums" style={{ fontSize: '54px', lineHeight: '1', letterSpacing: '0.05em', color: th.text, textAlign: 'center' }}>
             {h}:{m}
           </span>
-          <span style={{ fontSize: '13px', color: 'transparent' }}>&nbsp;</span>
         </div>
-      </div>
     </header>
   )
 }
@@ -320,6 +326,7 @@ function BitHeader({ now, weather, airQuality }: {
 function CctvView({ url }: { url: string | null }) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [connected, setConnected] = useState(false)
+  const [boxHeight, setBoxHeight] = useState(456)
 
   const src = url ? (url.endsWith('.m3u8') ? url : url.replace(/\/?$/, '/') + 'index.m3u8') : ''
 
@@ -330,6 +337,13 @@ function CctvView({ url }: { url: string | null }) {
     let hls: Hls | null = null
     let retryTimer: ReturnType<typeof setTimeout> | null = null
     let cancelled = false
+
+    const onMeta = () => {
+      if (video.videoWidth && video.videoHeight) {
+        setBoxHeight(Math.round(1000 * video.videoHeight / video.videoWidth))
+      }
+    }
+    video.addEventListener('loadedmetadata', onMeta)
 
     const start = () => {
       if (cancelled) return
@@ -360,6 +374,7 @@ function CctvView({ url }: { url: string | null }) {
       cancelled = true
       if (retryTimer) clearTimeout(retryTimer)
       hls?.destroy()
+      video.removeEventListener('loadedmetadata', onMeta)
     }
   }, [src])
 
@@ -368,7 +383,7 @@ function CctvView({ url }: { url: string | null }) {
       className="shrink-0 mx-auto rounded-[14px] overflow-hidden relative shadow-sm"
       style={{
         width: '1000px',
-        height: '456px',
+        height: `${boxHeight}px`,
         background: '#dfe3ee',
       }}
     >
@@ -554,7 +569,12 @@ function BusRow({ arrival }: { arrival: BusArrival }) {
         <img src="/bus-icon.png" alt="" width={36} height={48} className="shrink-0 object-contain" style={{ filter: isTownBus ? 'hue-rotate(30deg) saturate(1.3)' : 'none' }} />
         <span
           className="font-bold tracking-tighter"
-          style={{ fontSize: '50px', color: routeColor, lineHeight: '50px' }}
+          style={{
+            fontSize: cleanNo.length >= 5 ? '36px' : cleanNo.length === 4 ? '44px' : '50px',
+            color: routeColor,
+            lineHeight: '1',
+            whiteSpace: 'nowrap',
+          }}
         >
           {cleanNo}
         </span>
@@ -826,6 +846,7 @@ export default function Home() {
   const [winSize, setWinSize] = useState<{ w: number; h: number } | null>(null)
   const [showDebugOverlay, setShowDebugOverlay] = useState(false)
   const [cctvUrl, setCctvUrl] = useState<string | null>(null)
+  const [weatherTestIdx, setWeatherTestIdx] = useState(-1) // -1 = 실제 API 데이터 사용
 
   // 테마 동기화 — 렌더 전에 전역 참조 갱신
   _theme = isDark ? DARK : LIGHT
@@ -842,10 +863,17 @@ export default function Home() {
     return () => window.removeEventListener('resize', update)
   }, [])
 
-  // D 키로 다크모드 토글
+  // D 키로 다크모드 토글, W 키로 날씨 아이콘 테스트 순환 (실제 데이터로 복귀는 마지막에서 한번 더)
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'd' || e.key === 'D') setIsDark(v => !v)
+      if (e.key === 'w' || e.key === 'W') {
+        setWeatherTestIdx(v => {
+          const next = v + 1 >= WEATHER_TEST_STATES.length ? -1 : v + 1
+          console.log(`[날씨 테스트] ${next === -1 ? '실제 데이터' : WEATHER_TEST_STATES[next].label}`)
+          return next
+        })
+      }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
@@ -999,7 +1027,7 @@ export default function Home() {
       }}
     >
       {/* 1. Header (로고, 미세먼지 정보, 날씨, 날짜/시간) */}
-      <BitHeader now={now} weather={weather} airQuality={airQuality} />
+      <BitHeader now={now} weather={weatherTestIdx >= 0 ? WEATHER_TEST_STATES[weatherTestIdx].data : weather} airQuality={airQuality} />
 
       {/* Vector 1 (Horizontal Divider) */}
       <div className="w-[1080px] shrink-0" style={{ borderBottom: '3px solid #EBEDF3', height: '0px' }} />
