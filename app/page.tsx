@@ -241,9 +241,9 @@ function BitHeader({ now, weather, airQuality }: {
       className="shrink-0 w-full flex items-center justify-between"
       style={{
         boxSizing: 'border-box',
-        padding: '24px 40px',
+        padding: '32px 40px',
         background: th.headerBg,
-        height: '130px',
+        height: '146px',
       }}
     >
       {/* 왼쪽: 강화군 로고 */}
@@ -252,7 +252,7 @@ function BitHeader({ now, weather, airQuality }: {
           src="/logo-symbol.png"
           alt="강화군"
           className="object-contain"
-          style={{ height: '54px', width: 'auto' }}
+          style={{ height: '68px', width: 'auto' }}
         />
         <span style={{ fontSize: '17px', fontWeight: 700, color: th.text, letterSpacing: '0.01em', marginTop: '2px' }}>
           강화군
@@ -304,8 +304,8 @@ function BitHeader({ now, weather, airQuality }: {
         {/* 날씨 */}
         {weather != null && (
           <div className="flex items-center gap-2" style={{ height: '90px' }}>
-            <WeatherIcon sky={weather.sky} pty={weather.pty} size={40} />
-            <span className="font-semibold tabular-nums" style={{ fontSize: '24px', color: th.text }}>
+            <WeatherIcon sky={weather.sky} pty={weather.pty} size={60} />
+            <span className="font-bold tabular-nums" style={{ fontSize: '36px', color: th.text }}>
               {weather.temp != null ? `${Math.round(weather.temp)}°C` : ' '}
             </span>
           </div>
@@ -673,7 +673,7 @@ function MainList({ arrivals, serviceEnded }: { arrivals: BusArrival[]; serviceE
 
   if (serviceEnded) {
     return (
-      <section className="mx-auto rounded-[14px] overflow-hidden relative shadow-sm flex flex-col justify-center items-center"
+      <section className="shrink-0 mx-auto rounded-[14px] overflow-hidden relative shadow-sm flex flex-col justify-center items-center"
         style={{
           width: '1004px',
           height: '687px',
@@ -694,7 +694,7 @@ function MainList({ arrivals, serviceEnded }: { arrivals: BusArrival[]; serviceE
 
   return (
     <section
-      className="mx-auto rounded-[14px] overflow-hidden relative shadow-sm flex flex-col"
+      className="shrink-0 mx-auto rounded-[14px] overflow-hidden relative shadow-sm flex flex-col"
       style={{
         width: '1004px',
         height: '687px',
