@@ -65,7 +65,6 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
-      zoomFactor: scale,  // 초기 배율 적용 (페이지 로드 전)
     },
     show: false,
   })
@@ -74,7 +73,17 @@ function createWindow() {
     mainWindow.setKiosk(true)
   }
 
+  // webPreferences.zoomFactor는 로드 전 배율이 적용되지 않는 경우가 있어
+  // did-finish-load 이후 webContents.setZoomFactor로 확실히 적용
+  mainWindow.webContents.on('did-finish-load', () => {
+    mainWindow.webContents.setZoomFactor(scale)
+  })
+
   mainWindow.once('ready-to-show', () => mainWindow.show())
+
+  // 렌더러 프로세스만 죽는 경우(전체 앱 프로세스는 살아있음) 자동 복구
+  mainWindow.webContents.on('render-process-gone', () => mainWindow.reload())
+  mainWindow.webContents.on('unresponsive', () => mainWindow.reload())
 
   // 키오스크 모드에서 ESC 키를 눌러 종료할 수 있도록 이벤트 등록
   mainWindow.webContents.on('before-input-event', (event, input) => {
