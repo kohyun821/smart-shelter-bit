@@ -107,6 +107,8 @@ function loadSettings() {
 
   const host = String(raw.websocket.host || DEFAULTS.websocket.host).trim()
   const port = Number(raw.websocket.port) || DEFAULTS.websocket.port
+  // url: 스킴 포함 base (예: wss://dev.dh-ss.bond). 지정 시 host/port 대신 사용
+  const url = String(raw.websocket.url || '').trim().replace(/\/+$/, '')
 
   // wsBaseUrl: stationId 경로를 제외한 기본 URL
   // 환경변수 BRIDGE_WS_URL이 있으면 그대로 사용 (stationId 경로 포함 가정)
@@ -114,7 +116,7 @@ function loadSettings() {
   const wsUrl = process.env.BRIDGE_WS_URL || wsBaseUrl
 
   return {
-    websocket: { host, port },
+    websocket: { host, port, url },
     serial: { ...raw.serial },
     acSerial: { ...raw.acSerial },
     modbus: { ...raw.modbus },

@@ -175,6 +175,10 @@ let bitWsUrl = ''
 let bitWsReconnectTimer = null
 let bitWsReconnectDelay = 1000
 let bitWsReconnectAttempt = 0
+let bitWsPingTimer = null
+let bitWsLastPong = 0
+const BIT_WS_PING_MS = 30_000      // Cloudflare Tunnel 유휴 끊김(~100s) 방지
+const BIT_WS_PONG_TIMEOUT_MS = 75_000
 
 /** 현재 활성 프로모 시나리오 */
 let currentPromoScenario = null
@@ -188,6 +192,7 @@ function pushPromoSSE(data) {
 }
 
 function connectBitWS() {
+  clearInterval(bitWsPingTimer)
   if (bitWsClient) {
     bitWsClient.removeAllListeners()
     bitWsClient.terminate()
@@ -207,12 +212,22 @@ function connectBitWS() {
     bitWsReconnectDelay = 1000
     bitWsReconnectAttempt = 0
     sendBitWS({ type: 'booting' })
+
+    bitWsLastPong = Date.now()
+    bitWsPingTimer = setInterval(() => {
+      if (Date.now() - bitWsLastPong > BIT_WS_PONG_TIMEOUT_MS) {
+        console.warn('[Bridge][BitWS] status:pong 응답 없음 → 재연결')
+        bitWsClient.terminate()  // close 이벤트 → 재연결
+        return
+      }
+      sendBitWS({ type: 'status:ping' })
+    }, BIT_WS_PING_MS)
   })
 
   bitWsClient.on('message', (data) => {
     try {
       const msg = JSON.parse(data.toString())
-      console.log('[Bridge][BitWS] ←', JSON.stringify(msg).slice(0, 300))
+      if (msg.type !== 'status:pong') console.log('[Bridge][BitWS] ←', JSON.stringify(msg).slice(0, 300))
       handleBitWsMessage(msg)
     } catch {
       console.warn('[Bridge][BitWS] Non-JSON:', data.toString().slice(0, 100))
@@ -221,6 +236,7 @@ function connectBitWS() {
 
   bitWsClient.on('close', (code) => {
     bitWsReady = false
+    clearInterval(bitWsPingTimer)
     bitWsReconnectAttempt++
     if (bitWsReconnectAttempt <= 3 || bitWsReconnectAttempt % 10 === 0) {
       console.warn(`[Bridge][BitWS] 연결 끊김 (${code}). ${bitWsReconnectDelay}ms 후 재시도 ...`)
@@ -246,7 +262,7 @@ function scheduleBitWsReconnect() {
 function sendBitWS(payload) {
   if (!bitWsClient || !bitWsReady) return
   bitWsClient.send(JSON.stringify(payload))
-  console.log('[Bridge][BitWS] →', JSON.stringify(payload))
+  if (payload.type !== 'status:ping') console.log('[Bridge][BitWS] →', JSON.stringify(payload))
 }
 
 // ─── 홍보 시나리오 오프라인 캐시 ─────────────────────────────────────────────
@@ -259,24 +275,54 @@ function getPromoMediaDir() {
   return require('path').join(getDataDir(), 'promo-media')
 }
 
+function localMediaUrl(filename) {
+  return `http://localhost:${HTTP_PORT}/api/promo/media/${filename}`
+}
+
+function isSameScenario(a, b) {
+  return !!a && !!b && a.scenarioId === b.scenarioId && (a.version ?? null) === (b.version ?? null)
+}
+
 /**
- * 원격 미디어 파일을 로컬 경로에 다운로드합니다.
- * 이미 존재하면 skip합니다.
+ * 원격 미디어 파일을 로컬 경로에 다운로드합니다. (실패 시 2회 재시도)
+ * 이미 존재하면 skip합니다. 임시 파일에 받은 뒤 rename → 중단된 다운로드가 완료 파일로 남지 않음.
  */
 async function downloadMediaFile(mediaUrl, destPath) {
   const fs = require('fs')
   if (fs.existsSync(destPath)) return
-  const res = await fetch(mediaUrl)
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  const buf = Buffer.from(await res.arrayBuffer())
-  fs.writeFileSync(destPath, buf)
+  let lastErr
+  for (const delay of [0, 2000, 5000]) {
+    if (delay) await new Promise(r => setTimeout(r, delay))
+    try {
+      const res = await fetch(mediaUrl, { signal: AbortSignal.timeout(120_000) })  // 응답 없는 서버에서 무한 대기 방지
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const buf = Buffer.from(await res.arrayBuffer())
+      fs.writeFileSync(`${destPath}.part`, buf)
+      fs.renameSync(`${destPath}.part`, destPath)
+      return
+    } catch (err) { lastErr = err }
+  }
+  throw lastErr
+}
+
+/** promo-media/ 에서 keep에 없는 파일을 삭제합니다. */
+function prunePromoMedia(keep = new Set()) {
+  const fs = require('fs')
+  const pathMod = require('path')
+  const mediaDir = getPromoMediaDir()
+  try {
+    for (const name of fs.readdirSync(mediaDir)) {
+      if (!keep.has(name)) fs.unlinkSync(pathMod.join(mediaDir, name))
+    }
+  } catch {}
 }
 
 /**
  * promo:scenario 페이로드를 수신하면
  * 미디어 파일을 로컬에 다운로드하고, 로컬 URL로 교체한 뒤 JSON 파일로 저장합니다.
+ * 다운로드 중 다른 시나리오/버전으로 바뀌었거나 중지되었으면 저장하지 않고 null을 반환합니다.
  * @param {object} scenario
- * @returns {Promise<object>} 로컬 URL이 반영된 시나리오
+ * @returns {Promise<{ scenario: object, failed: number[] } | null>}
  */
 async function savePromoScenarioToFile(scenario) {
   const fs = require('fs')
@@ -284,25 +330,60 @@ async function savePromoScenarioToFile(scenario) {
   const mediaDir = getPromoMediaDir()
   if (!fs.existsSync(mediaDir)) fs.mkdirSync(mediaDir, { recursive: true })
 
+  const failed = []
+  const keep = new Set()
+  const prefix = scenario.version != null
+    ? `${scenario.scenarioId}_${scenario.version}`
+    : scenario.scenarioId
   const localBlocks = await Promise.all(
     scenario.blocks.map(async (block) => {
+      // 원본 URL 기준으로 파일명 결정 (재시도 시 이미 로컬 URL인 블록은 그대로 유지)
+      const sourceUrl = block.sourceUrl || block.mediaUrl
       try {
-        const urlPathname = new URL(block.mediaUrl).pathname
+        const urlPathname = new URL(sourceUrl).pathname
         const ext = pathMod.extname(urlPathname) || (block.fileType === 'video' ? '.mp4' : '.jpg')
-        const filename = `${scenario.scenarioId}_${block.sortOrder}${ext}`
-        await downloadMediaFile(block.mediaUrl, pathMod.join(mediaDir, filename))
-        return { ...block, mediaUrl: `http://localhost:${HTTP_PORT}/api/promo/media/${filename}` }
+        const filename = `${prefix}_${block.sortOrder}${ext}`
+        keep.add(filename)
+        await downloadMediaFile(sourceUrl, pathMod.join(mediaDir, filename))
+        return { ...block, sourceUrl, mediaUrl: localMediaUrl(filename) }
       } catch (err) {
         console.warn(`[Bridge][Promo] 미디어 다운로드 실패 (sortOrder=${block.sortOrder}): ${err.message}`)
-        return block  // 실패 시 원본 URL 유지
+        failed.push(block.sortOrder)
+        return { ...block, sourceUrl, mediaUrl: sourceUrl }  // 실패 시 원본 URL 유지
       }
     })
   )
 
+  if (!isSameScenario(currentPromoScenario, scenario)) {
+    console.log(`[Bridge][Promo] 다운로드 중 시나리오 변경됨 → 캐시 저장 생략: ${scenario.scenarioId} v${scenario.version ?? '-'}`)
+    return null
+  }
+
   const toSave = { ...scenario, blocks: localBlocks }
   fs.writeFileSync(getPromoScenarioPath(), JSON.stringify(toSave, null, 2), 'utf-8')
-  console.log(`[Bridge][Promo] 시나리오 캐시 저장 완료: ${scenario.scenarioId} (미디어 ${localBlocks.length}개)`)
-  return toSave
+  prunePromoMedia(keep)
+  console.log(`[Bridge][Promo] 시나리오 캐시 저장 완료: ${scenario.scenarioId} v${scenario.version ?? '-'} (미디어 ${localBlocks.length - failed.length}/${localBlocks.length}개)`)
+  return { scenario: toSave, failed }
+}
+
+/**
+ * 미디어 다운로드 → 캐시 저장 → 화면 갱신 → 서버에 promo:status 보고
+ */
+function cachePromoScenario(scenario) {
+  savePromoScenarioToFile(scenario)
+    .then(result => {
+      if (!result) return
+      currentPromoScenario = result.scenario
+      pushPromoSSE({ type: 'scenario', data: result.scenario })
+      sendBitWS({
+        type: 'promo:status',
+        scenarioId: scenario.scenarioId,
+        version: scenario.version ?? null,
+        state: result.failed.length ? 'partial' : 'ready',
+        failed: result.failed,
+      })
+    })
+    .catch(err => console.warn('[Bridge][Promo] 캐시 저장 실패:', err.message))
 }
 
 /**
@@ -336,17 +417,27 @@ function clearPromoScenarioFile() {
 function handleBitWsMessage(msg) {
   if (msg.type === 'booting_ack') {
     const serverScenarioId = msg.scenarioId
+    const label = `${serverScenarioId} v${msg.version ?? '-'}`
     if (!serverScenarioId) {
       console.log('[Bridge][BitWS] booting_ack: 배정된 시나리오 없음')
       if (currentPromoScenario) {
         currentPromoScenario = null
         clearPromoScenarioFile()
+        prunePromoMedia()
         pushPromoSSE({ type: 'stop', scenarioId: null })
       }
-    } else if (serverScenarioId === currentPromoScenario?.scenarioId) {
-      console.log(`[Bridge][BitWS] booting_ack: 시나리오 최신 (${serverScenarioId})`)
+    } else if (
+      serverScenarioId === currentPromoScenario?.scenarioId &&
+      (msg.version == null || msg.version === currentPromoScenario.version)  // version 없으면 ID만 비교 (하위호환)
+    ) {
+      console.log(`[Bridge][BitWS] booting_ack: 시나리오 최신 (${label})`)
+      // 이전에 다운로드 실패한 미디어가 있으면 재연결 시점에 재시도
+      if (currentPromoScenario.blocks?.some(b => !b.mediaUrl.startsWith(localMediaUrl('')))) {
+        console.log('[Bridge][Promo] 미수신 미디어 재다운로드 시도')
+        cachePromoScenario(currentPromoScenario)
+      }
     } else {
-      console.log(`[Bridge][BitWS] booting_ack: 시나리오 요청 → ${serverScenarioId}`)
+      console.log(`[Bridge][BitWS] booting_ack: 시나리오 요청 → ${label}`)
       sendBitWS({ type: 'scenario_request', scenarioId: serverScenarioId })
     }
     return
@@ -357,17 +448,10 @@ function handleBitWsMessage(msg) {
     currentPromoScenario = msg
     pushPromoSSE({ type: 'scenario', data: msg })
     sendBitWS({ type: 'promo:ack', scenarioId: msg.scenarioId })
-    console.log(`[Bridge][BitWS] 시나리오 수신: ${msg.scenarioId} (${msg.scenarioNm})`)
+    console.log(`[Bridge][BitWS] 시나리오 수신: ${msg.scenarioId} v${msg.version ?? '-'} (${msg.scenarioNm})`)
 
     // 백그라운드: 미디어 다운로드 후 로컬 URL로 캐시 저장
-    savePromoScenarioToFile(msg)
-      .then(localScenario => {
-        currentPromoScenario = localScenario
-        if (promoSseClients.size > 0) {
-          pushPromoSSE({ type: 'scenario', data: localScenario })
-        }
-      })
-      .catch(err => console.warn('[Bridge][Promo] 캐시 저장 실패:', err.message))
+    cachePromoScenario(msg)
     return
   }
 
@@ -375,6 +459,7 @@ function handleBitWsMessage(msg) {
     if (currentPromoScenario?.scenarioId === msg.scenarioId) {
       currentPromoScenario = null
       clearPromoScenarioFile()
+      prunePromoMedia()
       pushPromoSSE({ type: 'stop', scenarioId: msg.scenarioId })
       console.log(`[Bridge][BitWS] 시나리오 중지: ${msg.scenarioId}`)
     }
@@ -382,7 +467,7 @@ function handleBitWsMessage(msg) {
   }
 
   if (msg.type === 'status:pong') {
-    console.log('[Bridge][BitWS] status:pong 수신')
+    bitWsLastPong = Date.now()
     return
   }
 }
@@ -1235,7 +1320,8 @@ async function start({ connectWebSocket = true } = {}) {
   const stationId = await getStationId()
   const wsHost = settings.websocket?.host || 'localhost'
   const wsPort = settings.websocket?.port || 1470
-  bitWsUrl = `ws://${wsHost}:${wsPort}/ws/bit/${stationId}`
+  const wsBase = settings.websocket?.url || `ws://${wsHost}:${wsPort}`
+  bitWsUrl = `${wsBase}/ws/bit/${stationId}`
   console.log(`[Bridge][BitWS] 대상 URL: ${bitWsUrl} (stationId: ${stationId})`)
   connectBitWS()
 }
@@ -1253,6 +1339,7 @@ function stop() {
   }
 
   clearTimeout(bitWsReconnectTimer)
+  clearInterval(bitWsPingTimer)
   if (bitWsClient) {
     bitWsClient.removeAllListeners()
     bitWsClient.terminate()
