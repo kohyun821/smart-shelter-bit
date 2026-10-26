@@ -81,6 +81,16 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => mainWindow.show())
 
+  // 서버 원격 확인용 화면 캡처 (창 내용만 캡처 — OS 화면 녹화 권한 불필요)
+  bridge.setScreenCapturer(async (width) => {
+    if (mainWindow.isDestroyed()) return null
+    let img = await mainWindow.webContents.capturePage()
+    if (img.isEmpty()) return null
+    if (img.getSize().width > width) img = img.resize({ width, quality: 'good' })
+    const size = img.getSize()
+    return { jpeg: img.toJPEG(70), width: size.width, height: size.height }
+  })
+
   // 렌더러 프로세스만 죽는 경우(전체 앱 프로세스는 살아있음) 자동 복구
   mainWindow.webContents.on('render-process-gone', () => mainWindow.reload())
   mainWindow.webContents.on('unresponsive', () => mainWindow.reload())

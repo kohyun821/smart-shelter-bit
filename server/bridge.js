@@ -10,7 +10,6 @@ const cors = require('cors')
 const EventEmitter = require('events')
 const { loadSettings } = require('./loadSettings')
 const busApi = require('./busApi')
-const weatherApi = require('./weatherApi')
 const airQualityApi = require('./airQualityApi')
 
 // ─── Config ───────────────────────────────────────────────────────────────────
@@ -180,6 +179,72 @@ let bitWsLastPong = 0
 const BIT_WS_PING_MS = 30_000      // Cloudflare Tunnel 유휴 끊김(~100s) 방지
 const BIT_WS_PONG_TIMEOUT_MS = 75_000
 
+// ─── BIT 화면 캡처 (서버 원격 확인용) ─────────────────────────────────────────
+// 1분마다 창을 캡처해 screen:capture로 전송. 서버가 screen:live를 보내면 지정 시간 동안 짧은 간격으로 전송.
+
+const SCREEN_PERIOD_MS = 60_000
+const SCREEN_WIDTH = 960           // 전송 이미지 너비 (JPEG ~100KB 수준)
+const SCREEN_MAX_LIVE_MS = 120_000
+let screenCapturer = null          // main.js가 setScreenCapturer로 주입 (BrowserWindow 접근은 메인에서)
+let screenPeriodTimer = null
+let screenLiveTimer = null
+let screenLiveUntil = 0
+let screenCapturing = false
+
+/** @param {(width: number) => Promise<{ jpeg: Buffer, width: number, height: number } | null>} fn */
+function setScreenCapturer(fn) {
+  screenCapturer = fn
+}
+
+async function sendScreenCapture(live) {
+  if (!screenCapturer || !bitWsReady || screenCapturing) return
+  screenCapturing = true
+  try {
+    const shot = await screenCapturer(SCREEN_WIDTH)
+    if (!shot) return
+    sendBitWS({
+      type: 'screen:capture',
+      live,
+      capturedAt: Date.now(),
+      width: shot.width,
+      height: shot.height,
+      image: shot.jpeg.toString('base64'),
+    })
+  } catch (err) {
+    console.warn('[Bridge][Screen] 캡처 실패:', err.message)
+  } finally {
+    screenCapturing = false
+  }
+}
+
+function stopScreenLive() {
+  clearInterval(screenLiveTimer)
+  screenLiveTimer = null
+  screenLiveUntil = 0
+}
+
+/** screen:live { intervalMs, durationSec } — 같은 메시지가 다시 오면 기간 연장, durationSec 0이면 중지 */
+function startScreenLive(intervalMs, durationSec) {
+  const durationMs = Math.min(Math.max(Number(durationSec) || 0, 0) * 1000, SCREEN_MAX_LIVE_MS)
+  if (durationMs === 0) {
+    stopScreenLive()
+    return
+  }
+  const wasLive = !!screenLiveTimer
+  screenLiveUntil = Date.now() + durationMs
+  if (wasLive) return
+  console.log(`[Bridge][Screen] 실시간 캡처 시작 (${durationMs / 1000}초)`)
+  sendScreenCapture(true)
+  screenLiveTimer = setInterval(() => {
+    if (Date.now() > screenLiveUntil) {
+      console.log('[Bridge][Screen] 실시간 캡처 종료')
+      stopScreenLive()
+      return
+    }
+    sendScreenCapture(true)
+  }, Math.max(Number(intervalMs) || 1000, 500))
+}
+
 /** 현재 활성 프로모 시나리오 */
 let currentPromoScenario = null
 const promoSseClients = new Set()
@@ -212,6 +277,7 @@ function connectBitWS() {
     bitWsReconnectDelay = 1000
     bitWsReconnectAttempt = 0
     sendBitWS({ type: 'booting' })
+    setTimeout(() => sendScreenCapture(false), 3000)  // 연결 직후 최신 화면 1장
 
     bitWsLastPong = Date.now()
     bitWsPingTimer = setInterval(() => {
@@ -237,6 +303,7 @@ function connectBitWS() {
   bitWsClient.on('close', (code) => {
     bitWsReady = false
     clearInterval(bitWsPingTimer)
+    stopScreenLive()
     bitWsReconnectAttempt++
     if (bitWsReconnectAttempt <= 3 || bitWsReconnectAttempt % 10 === 0) {
       console.warn(`[Bridge][BitWS] 연결 끊김 (${code}). ${bitWsReconnectDelay}ms 후 재시도 ...`)
@@ -262,7 +329,7 @@ function scheduleBitWsReconnect() {
 function sendBitWS(payload) {
   if (!bitWsClient || !bitWsReady) return
   bitWsClient.send(JSON.stringify(payload))
-  if (payload.type !== 'status:ping') console.log('[Bridge][BitWS] →', JSON.stringify(payload))
+  if (payload.type !== 'status:ping' && payload.type !== 'screen:capture') console.log('[Bridge][BitWS] →', JSON.stringify(payload))
 }
 
 // ─── 홍보 시나리오 오프라인 캐시 ─────────────────────────────────────────────
@@ -463,6 +530,17 @@ function handleBitWsMessage(msg) {
       pushPromoSSE({ type: 'stop', scenarioId: msg.scenarioId })
       console.log(`[Bridge][BitWS] 시나리오 중지: ${msg.scenarioId}`)
     }
+    return
+  }
+
+  if (msg.type === 'screen:live') {
+    startScreenLive(msg.intervalMs, msg.durationSec)
+    return
+  }
+
+  if (msg.type === 'weather:update') {
+    weatherCache = { temp: msg.temp ?? null, sky: msg.sky ?? null, pty: msg.pty ?? 0 }
+    console.log(`[Bridge][Weather] 서버 수신: 현재 ${weatherCache.temp}°C, SKY=${weatherCache.sky}, PTY=${weatherCache.pty} (예보 ${msg.fcstDt ?? '-'})`)
     return
   }
 
@@ -948,32 +1026,11 @@ function stopArrivalPoller() {
   }
 }
 
-// ── 날씨 캐시 및 폴러 ─────────────────────────────────────────────────────────
+// ── 날씨 캐시 ─────────────────────────────────────────────────────────────────
+// 서버가 기상청 단기예보를 10분 주기로 수집해 BIT WS weather:update로 내려준다.
+// (booting 직후 1회 + 값이 바뀔 때마다)
 
 let weatherCache = null
-let weatherPollTimer = null
-
-async function pollWeather() {
-  try {
-    weatherCache = await weatherApi.fetchWeather()
-    console.log(`[Bridge][Weather] 업데이트: 현재 ${weatherCache.temp}°C, SKY=${weatherCache.sky}, PTY=${weatherCache.pty}`)
-  } catch (err) {
-    console.warn('[Bridge][Weather] 날씨 조회 실패:', err.message)
-  }
-}
-
-function startWeatherPoller() {
-  pollWeather()
-  weatherPollTimer = setInterval(pollWeather, 10 * 60 * 1000) // 10분 주기
-  console.log('[Bridge][Weather] 날씨 폴링 시작 (10분 주기)')
-}
-
-function stopWeatherPoller() {
-  if (weatherPollTimer) {
-    clearInterval(weatherPollTimer)
-    weatherPollTimer = null
-  }
-}
 
 // ── 대기질 캐시 및 폴러 ────────────────────────────────────────────────────────
 
@@ -1175,7 +1232,7 @@ app.get('/api/settings', (_req, res) => {
 
 /**
  * GET /api/weather
- * 기상청 단기예보 기반 날씨 정보 (현재 기온, 최저/최고기온, 하늘상태, 강수형태)
+ * 서버(weather:update)에서 받은 기상청 단기예보 기반 날씨 (현재 기온, 하늘상태, 강수형태)
  */
 app.get('/api/weather', (_req, res) => {
   if (!weatherCache) {
@@ -1301,8 +1358,7 @@ async function start({ connectWebSocket = true } = {}) {
     console.log(`[Bridge] Listening on http://localhost:${HTTP_PORT}`)
   })
 
-  // 날씨·대기질은 버스 초기화와 독립적으로 즉시 시작
-  startWeatherPoller()
+  // 대기질은 버스 초기화와 독립적으로 즉시 시작 (날씨는 BIT WS로 서버에서 수신)
   startAirQualityPoller()
 
   await busApi.initBusRoutesAndStops()
@@ -1324,14 +1380,17 @@ async function start({ connectWebSocket = true } = {}) {
   bitWsUrl = `${wsBase}/ws/bit/${stationId}`
   console.log(`[Bridge][BitWS] 대상 URL: ${bitWsUrl} (stationId: ${stationId})`)
   connectBitWS()
+
+  screenPeriodTimer = setInterval(() => sendScreenCapture(false), SCREEN_PERIOD_MS)
 }
 
 function stop() {
   clearTimeout(reconnectTimer)
   stopStatusUpdateTimer()
   stopArrivalPoller()
-  stopWeatherPoller()
   stopAirQualityPoller()
+  clearInterval(screenPeriodTimer)
+  stopScreenLive()
 
   if (wsClient) {
     wsClient.removeAllListeners()
@@ -1356,7 +1415,7 @@ function stop() {
   console.log('[Bridge] Stopped')
 }
 
-module.exports = { start, stop }
+module.exports = { start, stop, setScreenCapturer }
 
 // ─── Standalone Entry Point ───────────────────────────────────────────────────
 // node server/bridge.js              → data-only mode (no WebSocket)
