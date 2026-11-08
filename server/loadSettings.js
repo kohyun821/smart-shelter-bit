@@ -3,19 +3,9 @@
 const path = require('path')
 const fs = require('fs')
 
-function getConfigPath() {
-  try {
-    const { app } = require('electron')
-    if (app && app.isPackaged) {
-      return path.join(process.resourcesPath, 'config', 'settings.json')
-    }
-  } catch {
-    // standalone node process (e.g. node server/bridge.js)
-  }
-  return path.join(__dirname, '..', 'config', 'settings.json')
-}
+const { getConfigDir } = require('./appPaths')
 
-const CONFIG_PATH = getConfigPath()
+const CONFIG_PATH = path.join(getConfigDir(), 'settings.json')
 
 const DEFAULTS = {
   websocket: {

@@ -1,6 +1,6 @@
 {
-  "name": "smart-shelter-client",
-  "version": "0.1.0",
+  "name": "smart-shelter-bit",
+  "version": "0.1.1",
   "private": true,
   "main": "main.js",
   "scripts": {
@@ -11,12 +11,14 @@
     "electron:dev": "concurrently -k \"npm run dev\" \"wait-on http://localhost:3300 && electron .\"",
     "electron:build": "npm run build && npm run electron:pack",
     "electron:pack": "electron-builder --win",
-    "electron:start": "electron ."
+    "electron:start": "electron .",
+    "release": "next build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false WIN_CSC_LINK= electron-builder --win --publish always"
   },
   "dependencies": {
     "clsx": "^2.1.1",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
+    "electron-updater": "^6.8.9",
     "express": "^5.2.1",
     "hls.js": "^1.6.16",
     "lucide-react": "^0.474.0",
@@ -46,8 +48,8 @@
     "wait-on": "^8.0.1"
   },
   "build": {
-    "appId": "com.smart-shelter.client",
-    "productName": "Smart-Shelter",
+    "appId": "com.smart-shelter.bit",
+    "productName": "Smart-Shelter-BIT",
     "directories": {
       "output": "release"
     },
@@ -61,7 +63,10 @@
     "extraResources": [
       {
         "from": "data",
-        "to": "data"
+        "to": "data",
+        "filter": [
+          "setting.json"
+        ]
       },
       {
         "from": "config",
@@ -74,8 +79,20 @@
     ],
     "npmRebuild": false,
     "win": {
-      "target": "dir",
+      "target": "nsis",
       "signAndEditExecutable": false
-    }
+    },
+    "nsis": {
+      "perMachine": false,
+      "oneClick": true
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "kohyun821",
+        "repo": "smart-shelter-bit",
+        "private": true
+      }
+    ]
   }
 }

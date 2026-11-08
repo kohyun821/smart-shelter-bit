@@ -7,6 +7,7 @@ require('dotenv').config()
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
 
 const bridge = require('./server/bridge')
+const { getDataDir } = require('./server/appPaths')
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true } },
@@ -15,11 +16,20 @@ protocol.registerSchemesAsPrivileged([
 const isDev = !app.isPackaged
 const outDir = path.join(__dirname, 'out')
 
+// 워치독(1분 주기)·자동 업데이트 재실행으로 두 번째 인스턴스가 뜨면 브리지 포트(4000) 충돌 → 바로 종료
+const gotLock = app.requestSingleInstanceLock()
+if (!gotLock) app.quit()
+
+app.on('second-instance', () => {
+  const win = BrowserWindow.getAllWindows()[0]
+  if (!win) return
+  if (win.isMinimized()) win.restore()
+  win.focus()
+})
+
 function getWindowSettings() {
   try {
-    const dataPath = app.isPackaged
-      ? path.join(process.resourcesPath, 'data', 'setting.json')
-      : path.join(__dirname, 'data', 'setting.json')
+    const dataPath = path.join(getDataDir(), 'setting.json')
     const data = fs.readFileSync(dataPath, 'utf-8')
     const json = JSON.parse(data)
     if (Array.isArray(json) && json.length > 0) {
@@ -110,9 +120,45 @@ function createWindow() {
   }
 }
 
+function checkForUpdates() {
+  const { autoUpdater } = require('electron-updater')
+  autoUpdater.setFeedURL({
+    provider: 'github',
+    owner: 'kohyun821',
+    repo: 'smart-shelter-bit',
+    private: true,
+    token: process.env.GH_TOKEN,
+  })
+  autoUpdater.on('checking-for-update', () => logUpdater(`확인 시작 (현재 ${app.getVersion()})`))
+  autoUpdater.on('update-not-available', (info) => logUpdater(`최신 버전 (${info.version})`))
+  autoUpdater.on('update-available', (info) => logUpdater(`새 버전 발견: ${info.version} → 다운로드`))
+  autoUpdater.on('update-downloaded', (info) => {
+    logUpdater(`다운로드 완료: ${info.version} → 설치 후 재시작`)
+    autoUpdater.quitAndInstall()
+  })
+  autoUpdater.on('error', (err) => {
+    console.error('[AutoUpdater]', err.message)
+    logUpdater(`오류: ${err.message}`)
+  })
+  autoUpdater.checkForUpdates()
+}
+
+// 지점 PC에서 업데이트 결과를 확인할 수 있도록 userData/logs/updater.log 에 남김
+function logUpdater(message) {
+  try {
+    const dir = path.join(app.getPath('userData'), 'logs')
+    fs.mkdirSync(dir, { recursive: true })
+    fs.appendFileSync(path.join(dir, 'updater.log'), `${new Date().toISOString()} ${message}\n`)
+  } catch (_) {
+    // 로그 실패가 업데이트를 막지 않도록 무시
+  }
+}
+
 app.whenReady().then(() => {
+  if (!gotLock) return
   bridge.start()
   if (!isDev) {
+    checkForUpdates()
     protocol.handle('app', (request) => {
       const url = request.url.slice('app://'.length)
       const decoded = decodeURIComponent(url)

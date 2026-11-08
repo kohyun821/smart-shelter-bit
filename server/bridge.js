@@ -9,6 +9,7 @@ const WebSocket = require('ws')
 const cors = require('cors')
 const EventEmitter = require('events')
 const { loadSettings } = require('./loadSettings')
+const { getDataDir } = require('./appPaths')
 const busApi = require('./busApi')
 const airQualityApi = require('./airQualityApi')
 
@@ -34,16 +35,6 @@ let reconnectDelay = 1000     // 1s → 최대 30s (exponential backoff)
 let statusUpdateTimer = null  // 5분 주기 status:update 타이머
 let wasConnected = false      // 한 번이라도 연결된 적 있는지 (stopAll 조건 판단용)
 
-/**
- * data/setting.json에서 패키징 여부에 따른 data 디렉토리 경로를 반환합니다.
- */
-function getDataDir() {
-  try {
-    const { app } = require('electron')
-    if (app && app.isPackaged) return require('path').join(process.resourcesPath, 'data')
-  } catch {}
-  return require('path').join(__dirname, '..', 'data')
-}
 
 // 파일 로그 활성화 (settings.logging.enableFile === true 일 때만 data/logs/ 에 저장)
 initFileLogging(settings.logging, getDataDir())

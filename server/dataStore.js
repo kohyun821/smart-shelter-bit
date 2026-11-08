@@ -3,21 +3,9 @@
 const fs = require('fs/promises')
 const path = require('path')
 
-// ─── File Paths ───────────────────────────────────────────────────────────────
-// 개발(Electron dev / standalone node): 프로젝트 루트의 data/
-// 프로덕션(패키징):  app.isPackaged === true → extraResources의 resources/data/
+const { getDataDir } = require('./appPaths')
 
-function getDataDir() {
-  try {
-    const { app } = require('electron')
-    if (app && app.isPackaged) {
-      return path.join(process.resourcesPath, 'data')
-    }
-  } catch {
-    // standalone node process (e.g. node server/bridge.js)
-  }
-  return path.resolve(__dirname, '..', 'data')
-}
+// ─── File Paths ───────────────────────────────────────────────────────────────
 
 const DATA_DIR = getDataDir()
 
