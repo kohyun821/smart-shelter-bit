@@ -1071,13 +1071,6 @@ export default function Home() {
           {winSize.w} × {winSize.h} px
         </div>
       )}
-      {/* 다크모드 상태 표시 (개발용) */}
-      <div
-        className="fixed bottom-2 right-2 z-[9999] text-xs font-mono px-3 py-1.5 rounded-lg pointer-events-none"
-        style={{ background: th.card, color: th.muted, border: `1px solid ${th.border}` }}
-      >
-        {isDark ? '🌙 Dark' : '☀️ Light'} · D키 전환
-      </div>
     </div>
   )
 }
