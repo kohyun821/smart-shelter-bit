@@ -817,20 +817,21 @@ function hhmmToMinutes(hhmm) {
 }
 
 /**
- * 현재 시각이 해당 노선의 막차 시각을 지났는지 확인합니다.
- * @param {string} lbusDephms — hhmm 4자리 (예: '2230', '0015')
+ * 현재 시각이 해당 노선의 막차 이후 ~ 첫차 이전(운행 종료 시간대)인지 확인합니다.
+ * @param {string} lbusDephms — 막차 hhmm 4자리 (예: '2230', '0015')
+ * @param {string} fbusDephms — 첫차 hhmm 4자리 (없으면 04:00 기준)
  * @returns {boolean}
  */
-function isRouteServiceEnded(lbusDephms) {
+function isRouteServiceEnded(lbusDephms, fbusDephms) {
   const lastMin = hhmmToMinutes(lbusDephms)
   if (lastMin === null) return false
+  const firstMin = hhmmToMinutes(fbusDephms) ?? 240
   const now = new Date()
   const nowMin = now.getHours() * 60 + now.getMinutes()
-  // 자정 이후 막차(예: 0015=15분)는 당일 심야 운행으로 처리
-  if (lastMin < 240) {
-    return nowMin < 240 && nowMin > lastMin
-  }
-  return nowMin > lastMin
+  // 막차가 자정 전(예: 2230): 막차 이후 또는 자정 넘어 첫차 전까지 종료
+  if (lastMin >= firstMin) return nowMin > lastMin || nowMin < firstMin
+  // 막차가 자정 이후(예: 0015): 막차 이후 ~ 첫차 전까지 종료
+  return nowMin > lastMin && nowMin < firstMin
 }
 
 /**
@@ -962,7 +963,7 @@ async function buildArrivalData() {
   // 운행 종료 판단: 모든 노선의 막차 시각 데이터가 있고, 전부 지났으며, 운행 중 버스 없음
   const allHaveSchedule = cache.length > 0 && cache.every(r => r.lbusDephms)
   const serviceEnded = allHaveSchedule
-    && cache.every(r => isRouteServiceEnded(r.lbusDephms))
+    && cache.every(r => isRouteServiceEnded(r.lbusDephms, r.fbusDephms))
     && arrivals.length === 0
 
   return { arrivals, serviceEnded }
