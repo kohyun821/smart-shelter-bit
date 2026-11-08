@@ -114,6 +114,15 @@ const ROUTE_FIELDS = [
   'DEST_BSTOPID', 'DESTINATION',
 ]
 
+// 실시간 API(도착·위치)는 운행 중인 버스가 없으면 code=4(결과 없음)로 응답 → 빈 목록으로 처리.
+// 오류로 던지면 폴링 실패로 끝나 화면에 마지막 도착 정보(예: "곧 도착")가 계속 남음.
+const NO_RESULT_CODE = '4'
+
+function parseRealtimeJson(json, fields) {
+  if (String(json?.msgHeader?.resultCode) === NO_RESULT_CODE) return []
+  return parseJson(json, fields)
+}
+
 const SECTION_FIELDS = ['BSTOPID', 'BSTOPNM', 'PATHSEQ', 'BSTOPSEQ', 'DIRCD']
 
 const ROUTE_ID_FIELDS = ['ROUTEID', 'ROUTENO', 'FBUS_DEPHMS', 'LBUS_DEPHMS']
@@ -262,7 +271,7 @@ async function fetchAllRouteBusArrivalList(bstopId) {
   const response = await fetch(url)
   if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
 
-  return parseJson(await fetchApiJson(response), ARRIVAL_FIELDS)
+  return parseRealtimeJson(await fetchApiJson(response), ARRIVAL_FIELDS)
 }
 
 // ─── getBusRouteLocation ──────────────────────────────────────────────────────
@@ -286,7 +295,7 @@ async function fetchBusRouteLocation(routeId) {
   const response = await fetch(url)
   if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
 
-  return parseJson(await fetchApiJson(response), LOCATION_FIELDS)
+  return parseRealtimeJson(await fetchApiJson(response), LOCATION_FIELDS)
 }
 
 /**
