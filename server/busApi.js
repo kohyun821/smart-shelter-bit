@@ -13,6 +13,8 @@ function getResourcesPath() {
   return path.join(__dirname, '..')
 }
 
+const { getDataDir } = require('./appPaths')
+
 require('dotenv').config({ path: path.join(getResourcesPath(), '.env') })
 
 // ─── Base URLs (lib/api/bus.ts와 동일하게 유지) ───────────────────────────────
@@ -46,7 +48,7 @@ function getServiceKey() {
  * @returns {string}
  */
 function loadBusStopId() {
-  const filePath = path.join(getResourcesPath(), 'data', 'setting.json')
+  const filePath = path.join(getDataDir(), 'setting.json')
   try {
     const raw = fs.readFileSync(filePath, 'utf-8')
     const json = JSON.parse(raw)
